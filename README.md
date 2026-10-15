@@ -131,7 +131,8 @@ build/engine/crucible gen "$CKPT" --ids-file prompt.ids --n 160 --spec 2 --ctx 4
 
 - Ryzen AI Max+ 395, Radeon 8060S (gfx1151), 128 GB shared LPDDR5X-8000.
 - Linux. The tested system is Arch Linux with kernel 7.2.7 and ROCm 7.2.4.
-- A C++20 HIP compiler, GNU Make, and POSIX threads.
+- A C++20 HIP compiler, GNU Make, and POSIX threads. The CPU test suite needs
+  GCC 14 or newer, or Clang 18 or newer.
 - Python 3.12 or newer. The CPU dependencies are in `requirements-cpu.txt`.
 - Enough disk space for one complete checkpoint and the build output.
 
