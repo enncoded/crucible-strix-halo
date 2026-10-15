@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "checkpoint_name": "Qwen3.8-Flash-Next-exl3-3.05bpw_h5_ng5",
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "source_sha256": "064c2c031196083881a4493e81336b30992d318c98c96b7cf22f55d347bccb58",
+  "tok_py_sha256": "4a75d7a6a3b4789394ff00d3708ef1674c1e440e5226715c58d7492a8d6a99b7",
+  "chat_format": "tools/tok.py --chat, empty think block",
+  "long_method": "Tokenize repeated records; trim the middle and retain the suffix.",
+  "prompts": [
+    {
+      "name": "code_fibonacci",
+      "category": "code",
+      "tokens": 51,
+      "ids_file": "ids/code_fibonacci.txt",
+      "sha256": "dc32e66920d419e6a6cd2631d457aa712ab1a76eb12f230b9967a9e6ea8fa0de"
+    },
+    {
+      "name": "code_json",
+      "category": "code",
+      "tokens": 70,
+      "ids_file": "ids/code_json.txt",
+      "sha256": "adcf2237f9fe4d91de21db30351ef2e47e6a5b2d83d7bcdcb8aeaebe05f96c93"
+    },
+    {
+      "name": "chat_planning",
+      "category": "chat",
+      "tokens": 63,
+      "ids_file": "ids/chat_planning.txt",
+      "sha256": "6d71461068f73d0a2ff85b8ab02be1855b30a35bedcf271e4eebc37bb9a7f50a"
+    },
+    {
+      "name": "chat_explain",
+      "category": "chat",
+      "tokens": 48,
+      "ids_file": "ids/chat_explain.txt",
+      "sha256": "f8c81fb9c70bfb0bae7e9c51480c0dcda66cb0a2ee9f87c0d023f5b51c2847e8"
+    },
+    {
+      "name": "chat_spanish",
+      "category": "chat",
+      "tokens": 51,
+      "ids_file": "ids/chat_spanish.txt",
+      "sha256": "3485103460f1e12f5b5e1d350fc932e18d2061b0b11270e82927ac6f13a59a1e"
+    },
+    {
+      "name": "prose_story",
+      "category": "prose",
+      "tokens": 62,
+      "ids_file": "ids/prose_story.txt",
+      "sha256": "46c39636246899bb9eeb8a261f90550d43ccd576de86cf555d1066489b902ce1"
+    },
+    {
+      "name": "prose_explain",
+      "category": "prose",
+      "tokens": 54,
+      "ids_file": "ids/prose_explain.txt",
+      "sha256": "beb4bdcab91f7f200313db69cd1e7dfc8df312a9bae00f989be2d7ebafdc7c1a"
+    },
+    {
+      "name": "copy_python",
+      "category": "copy",
+      "tokens": 207,
+      "ids_file": "ids/copy_python.txt",
+      "sha256": "676425157821e855fb543e4a941ae3e521bdd67b021d5a4d050b0e1666f6edb3"
+    },
+    {
+      "name": "copy_config",
+      "category": "copy",
+      "tokens": 165,
+      "ids_file": "ids/copy_config.txt",
+      "sha256": "36d5d40759e30e8fcddd83e5a623632f14becac2cb1faa35b497c1c6e518d0b6"
+    },
+    {
+      "name": "long_4096",
+      "category": "long",
+      "tokens": 4096,
+      "ids_file": "ids/long_4096.txt",
+      "sha256": "f5f5f3574382a34a7291363e3e218cf0acfce7ba4d3be06f3e0dce10d4167a3f"
+    },
+    {
+      "name": "long_16384",
+      "category": "long",
+      "tokens": 16384,
+      "ids_file": "ids/long_16384.txt",
+      "sha256": "84f88989ddb400cb616c60c39807f4ea191f5ba0006069a4c55c7b8bba03e9ce"
+    },
+    {
+      "name": "long_65536",
+      "category": "long",
+      "tokens": 65536,
+      "ids_file": "ids/long_65536.txt",
+      "sha256": "1627147ca8815e1f35490cf6d0b3f2ef74dbd3c75e5e63ae499b5478d9da6077"
+    }
+  ]
+}

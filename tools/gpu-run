@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""A simple stand-in for a GPU queue: one GPU job at a time, in no fixed order.
+
+  gpu-run [-p PRIO] [-w SECONDS] -- cmd [args...]
+
+The tools start every GPU command through this command line. This stand-in takes an exclusive flock on
+GPU_RUN_LOCK (default /tmp/crucible-gpu.lock), so that two GPU jobs never overlap, and then runs the command.
+PRIO is accepted and ignored. SECONDS is the longest wait for the lock (default 3600).
+Exit 75 when the wait expires; otherwise the exit code of the command.
+
+Copy it to $WORK_DIR/bin/gpu-run (see tools/work_paths.py), or put a real queue program there.
+"""
+import argparse
+import fcntl
+import os
+import subprocess
+import sys
+import time
+
+LOCK = os.environ.get("GPU_RUN_LOCK", "/tmp/crucible-gpu.lock")
+EXPIRED = 75
+POLL_S = 0.5
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog="gpu-run", description=__doc__.splitlines()[0])
+    parser.add_argument("-p", type=int, default=2, help="priority (accepted, not used)")
+    parser.add_argument("-w", type=float, default=3600.0, help="longest wait for the lock, in seconds")
+    parser.add_argument("cmd", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
+    if not cmd:
+        parser.error("give a command after --")
+    deadline = time.monotonic() + args.w
+    with open(LOCK, "a") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    print(f"gpu-run: the wait of {args.w:g} s expired", file=sys.stderr)
+                    return EXPIRED
+                time.sleep(POLL_S)
+        return subprocess.call(cmd)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

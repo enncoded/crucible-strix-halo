@@ -1,0 +1,6 @@
+# Offline tests, tokenizer, and local HTTP server.
+numpy>=1.26,<3
+pytest>=8,<10
+Jinja2>=3.1.6,<4
+tokenizers>=0.21,<1
+Pillow>=10,<13

@@ -1,0 +1,3 @@
+# or more (not byte-identical; tests/data/copied_files.txt owns those). Only delete lines (when a file goes or the
+# pair differs more). Never add one: extend the shared file instead. One pair per line, "PATH_A PATH_B", sorted.
+# Frozen at train 20. The pairs below are the rendered per-train deploy files. .json files do not count.

@@ -1,0 +1,18 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain why fixed seeds and independent request state matter."
+    }
+  ],
+  "max_tokens": 32,
+  "spec": 0,
+  "enable_thinking": false,
+  "cache_control": "auto",
+  "return_token_ids": true,
+  "crucible_metrics": true,
+  "temperature": 0.7,
+  "top_k": 32,
+  "top_p": 0.95,
+  "seed": 321
+}

@@ -1,0 +1,166 @@
+old_path	new_path	module	reason	decide
+bench/safetensors.h	engine/exl3/safetensors.h	exl3	Checkpoint container reader (mmap, JSON header, tensor bounds). Six engine headers include it from bench/.	Decision (Oct 10): move it.
+engine/ablation.h	engine/layers/ablation.h	layers	Host half of the opt-in HC write-back edit (CRUCIBLE_ABLATE).	
+engine/ablation_device.h	engine/layers/ablation_device.h	layers	Device half of the HC write-back edit.	
+engine/balanced_items.h	engine/exl3/balanced_items.h	exl3	Dense EXL3 work lists per column block.	
+engine/batch_admission.h	engine/runtime/batch_admission.h	runtime	Memory admission for batched streams.	
+engine/batch_cli.h	engine/cli/batch_cli.h	cli	Greedy multi-stream CLI mode.	
+engine/batch_contract.h	engine/runtime/batch_contract.h	runtime	CPU checks before a stream advances its retained prefix.	
+engine/batch_conversation_cache.h	engine/serve/batch_conversation_cache.h	serve	LRU of conversation states owned by the batched serve worker.	
+engine/batch_forward.h	engine/runtime/batch_forward.h	runtime	Fragment inside class Engine: packed multi-row forward.	
+engine/batch_inputs.h	engine/runtime/batch_inputs.h	runtime	Row input lifetime for queued device copies.	
+engine/batch_mtp_history.h	engine/serve/batch_mtp_history.h	serve	MTP history for batched serve requests.	
+engine/batch_options.h	engine/cli/batch_options.h	cli	Batch CLI option parsing.	
+engine/batch_session.h	engine/serve/batch_session.h	serve	Batched serve session: one caller owns the engine.	
+engine/batch_spec_contract.h	engine/runtime/batch_spec_contract.h	runtime	Span checks before a request changes recurrent state.	
+engine/batch_spec_forward.h	engine/runtime/batch_spec_forward.h	runtime	Fragment inside class Engine: packed verification.	
+engine/batch_state_disk.h	engine/serve/batch_state_disk.h	serve	Disk tier of batched serve.	
+engine/batched_serve.h	engine/serve/batched_serve.h	serve	Batched serve protocol loop.	
+engine/batched_serve_protocol.h	engine/serve/batched_serve_protocol.h	serve	Batched serve commands.	
+engine/batched_serve_settings.h	engine/serve/batched_serve_settings.h	serve	Batched serve startup settings.	
+engine/bounds.h	engine/runtime/bounds.h	runtime	Request bounds checked before upload or cache write.	
+engine/cache_status.h	engine/serve/cache_status.h	serve	Cache visibility fields for the serve protocol.	
+engine/cache_storage.h	engine/layers/cache_storage.h	layers	KV and state storage addresses that ops.h reads.	Could be model/flashnext (state layout), but then ops.h -> cache_storage.h is upward.
+engine/common.h	engine/gfx1151/common.h	gfx1151	Wave32 device helpers (HIP_OK, wave sums, WHT stages).	
+engine/conversation_admission.h	engine/runtime/conversation_admission.h	runtime	Chunk reuse rules for growing conversations.	
+engine/conversation_cache.h	engine/runtime/conversation_cache.h	runtime	Immutable conversation cache entries.	
+engine/conversation_resume.h	engine/runtime/conversation_resume.h	runtime	Resume metadata for a prefix.	
+engine/conversation_snapshot.h	engine/runtime/conversation_snapshot.h	runtime	Fragment after class Engine: snapshot copies.	
+engine/decode_policy.h	engine/runtime/decode_policy.h	runtime	User-facing decode defaults.	
+engine/decode_split.h	engine/exl3/decode_split.h	exl3	Split policy shared by EXL3 plan building and front tile order.	
+engine/decode_support.h	engine/exl3/decode_support.h	exl3	Supported EXL3 decode capabilities.	
+engine/dense_rows.h	engine/layers/dense_rows.h	layers	Multi-row fp16 matvec (router, PLE dense).	
+engine/device_zero.h	engine/runtime/device_zero.h	runtime	Zero-span check for gen --jobs state.	
+engine/draft_adapt.h	engine/runtime/draft_adapt.h	runtime	Draft block selection.	
+engine/draft_dense.h	engine/runtime/draft_dense.h	runtime	Draft-only fp16 weights.	Could be layers/ if the draft head becomes a layer kind.
+engine/draft_head_policy.h	engine/runtime/draft_head_policy.h	runtime	Proposal head choice.	
+engine/draft_ops.h	engine/runtime/draft_ops.h	runtime	Draft-only sampling kernels.	
+engine/draft_overlap.h	engine/runtime/draft_overlap.h	runtime	Fragment in engine.hip: draft overlap.	
+engine/draft_policy.h	engine/runtime/draft_policy.h	runtime	CPU proposal helpers.	
+engine/draft_value.h	engine/runtime/draft_value.h	runtime	Value-aware draft length.	
+engine/runtime/draft_accept.h	engine/runtime/draft_accept.h	runtime	Draft acceptance prior from the MTP margin (moved down from cli).	
+engine/runtime/gen_options.h	engine/runtime/gen_options.h	runtime	Generation options and draft selection rules (moved down from cli).	
+engine/runtime/prefill_rows.h	engine/runtime/prefill_rows.h	runtime	Prefill row limits (moved down from engine.hip).	
+engine/draft_vocab.h	engine/runtime/draft_vocab.h	runtime	Embedded draft vocabulary selection.	
+engine/draft_warmup.h	engine/runtime/draft_warmup.h	runtime	Bounded auxiliary prefix for proposals.	
+engine/dump_io.h	engine/runtime/dump_io.h	runtime	Checked residual dump output.	
+engine/engine.hip	engine/engine.hip	engine	The one translation unit: class Engine, its fragments and main.	Stays at engine/ (advice: do not split engine.hip now). Its own module is the TU root.
+engine/exl3.h	engine/exl3/exl3.h	exl3	EXL3 linear op: input transform, matvec, output transform.	
+engine/exl3_ring.h	engine/exl3/exl3_ring.h	exl3	Opt-in dense EXL3 ring schedule.	
+engine/expert_count.h	engine/layers/expert_count.h	layers	Measurement: distinct routed experts per MoE call.	
+engine/fixed_state.h	engine/model/flashnext/fixed_state.h	model/flashnext	Fixed-size sequence state list (state layout).	
+engine/front_order.h	engine/exl3/front_order.h	exl3	Front tile order of dense EXL3 matrices.	
+engine/gdn_rows.h	engine/layers/gdn_rows.h	layers	GDN kernel for R = 2..8 rows.	
+engine/gen_cli.h	engine/cli/gen_cli.h	cli	The gen command (RunGen).	
+engine/gen_job_state.h	engine/cli/gen_job_state.h	cli	State checks between gen --jobs captures.	
+engine/gen_jobs.h	engine/cli/gen_jobs.h	cli	gen --jobs driver.	
+engine/generation.h	engine/runtime/generation.h	runtime	Greedy decode and verification steps.	
+engine/geometry.h	engine/model/flashnext/geometry.h	model/flashnext	Model config leaf (named geometry). Every layer may include it.	Config leaf exception: any module may include it; it includes nothing.
+engine/hc_wmma.h	engine/layers/hc_wmma.h	layers	Decode HC read on WMMA.	
+engine/load_tasks.h	engine/exl3/load_tasks.h	exl3	Weight load task split (no HIP).	
+engine/lookahead.h	engine/exl3/lookahead.h	exl3	Static-weight lookahead for EXL3 rows.	
+engine/migration_wait.h	engine/gfx1151/migration_wait.h	gfx1151	Wait for the KFD migration counter.	
+engine/model.h	engine/model/flashnext/model.h	model/flashnext	Model weights, tensor names and load.	The EXL3 loader part could split into exl3/ later.
+engine/moe_chunk_map.h	engine/layers/moe_chunk_map.h	layers	Compact expert jobs for packed rows.	
+engine/moe_rows.h	engine/layers/moe_rows.h	layers	Row-sparse routed experts for verify rows.	
+engine/moe_shared_first.h	engine/layers/moe_shared_first.h	layers	Shared-expert-first plan order.	
+engine/moe_window_policy.h	engine/layers/moe_window_policy.h	layers	MoE window compile switch.	
+engine/mtp_bulk.h	engine/runtime/mtp_bulk.h	runtime	Bulk MTP warm-up.	
+engine/mtp_sidecar.h	engine/model/flashnext/mtp_sidecar.h	model/flashnext	MTP draft sidecar text.	
+engine/multimodal.h	engine/model/flashnext/multimodal.h	model/flashnext	Image request rules and mRoPE positions.	Request parsing could move to serve/. It includes the leaf sha256.h.
+engine/numerics.h	engine/layers/numerics.h	layers	Numerics mode (NUMERICS.md) for layer kernels.	
+engine/ops.h	engine/layers/ops.h	layers	Non-EXL3 operators of the forward pass.	
+engine/packed_rows_option.h	engine/runtime/packed_rows_option.h	runtime	Rows of one packed verify pass (switch).	
+engine/packed_state.h	engine/layers/packed_state.h	layers	Kernel descriptor copies for ops.h.	
+engine/pass_rows.h	engine/runtime/pass_rows.h	runtime	Rows of one packed verify pass.	
+engine/persistent_gdn.h	engine/layers/persistent_gdn.h	layers	Persistent R=1 attention-side prototype.	
+engine/persistent_hc.h	engine/layers/persistent_hc.h	layers	HC read for the persistent kernel.	
+engine/persistent_ops.h	engine/layers/persistent_ops.h	layers	Generated reference contractions.	
+engine/pinned_allocator.h	engine/gfx1151/pinned_allocator.h	gfx1151	Locked-page allocator.	
+engine/pinned_buffer.h	engine/gfx1151/pinned_buffer.h	gfx1151	Fixed pinned transfer storage.	
+engine/plans.h	engine/exl3/plans.h	exl3	EXL3 linear plan descriptors.	
+engine/ple_host.h	engine/model/flashnext/ple_host.h	model/flashnext	PLE n-gram rows gathered on the CPU.	
+engine/prefill_bench.h	engine/cli/prefill_bench.h	cli	Fragment after class Engine: prefill bench mode.	
+engine/prefill_engine.inc	engine/runtime/prefill_engine.inc	runtime	Fragment inside class Engine: bulk prefill.	
+engine/prefill_front_check.h	engine/runtime/prefill_front_check.h	runtime	Engine-order check for MoE prefill tiles.	
+engine/prefill_hc.h	engine/layers/prefill_hc.h	layers	Prefill HC kernels.	
+engine/prefill_interleave.h	engine/runtime/prefill_interleave.h	runtime	Decode passes between prefill layers.	
+engine/prefill_items.h	engine/exl3/prefill_items.h	exl3	Input-transform item arithmetic.	
+engine/prefill_launch.h	engine/model/flashnext/prefill_launch.h	model/flashnext	Prefill row schedule constants.	Could be runtime/; kernels/prefill_moe.h includes it.
+engine/prefill_linear.h	engine/exl3/prefill_linear.h	exl3	Batched EXL3 prefill plans.	
+engine/prefill_moe.h	engine/layers/prefill_moe.h	layers	Prefill MoE transforms and combine.	
+engine/layers/prefill_moe_pair.h	engine/layers/prefill_moe_pair.h	layers	Prefill MoE M1: gate/up and the mid step in one kernel.	New file.
+engine/prefill_plan_budget.h	engine/runtime/prefill_plan_budget.h	runtime	Prefill plan eviction rule.	
+engine/prefill_ple.h	engine/layers/prefill_ple.h	layers	Prefill PLE mix.	
+engine/prefill_prune.h	engine/runtime/prefill_prune.h	runtime	Partial last-layer pruning.	
+engine/prompt.h	engine/runtime/prompt.h	runtime	Prompt row schedule.	
+engine/qsa_capture.h	engine/layers/qsa_capture.h	layers	Opt-in QSA input capture.	
+engine/qsa_capture_policy.h	engine/layers/qsa_capture_policy.h	layers	Full or index-only QSA capture rule.	
+engine/qsa_long.h	engine/layers/qsa_long.h	layers	Long-context QSA decode.	
+engine/retained_prefix.h	engine/runtime/retained_prefix.h	runtime	Recurrent-state prefix contract.	
+engine/ring_rows.h	engine/exl3/ring_rows.h	exl3	R > 1 dense EXL3 ring.	
+engine/row_policy.h	engine/exl3/row_policy.h	exl3	Row-dependent EXL3 launch selection.	
+engine/runtime/layer_loop.h	engine/runtime/layer_loop.h	runtime	The one trunk layer loop, RunTrunk.	New in train 20 (s-loop86); tests/test_layer_loops.py allows one trunk loop, here.
+engine/runtime_memory_policy.h	engine/gfx1151/runtime_memory_policy.h	gfx1151	SVM migration policy.	
+engine/sampling.h	engine/runtime/sampling.h	runtime	Filtered sampling.	
+engine/sampling_generation.h	engine/runtime/sampling_generation.h	runtime	Sampled decode and rejection.	
+engine/sequence_state.h	engine/runtime/sequence_state.h	runtime	Mutable per-sequence state.	
+engine/serve.h	engine/serve/serve.h	serve	Serial serve loop (retires in train 19).	
+engine/serve_protocol.h	engine/serve/serve_protocol.h	serve	JSON-line request parsing.	
+engine/serve_settings.h	engine/serve/serve_settings.h	serve	Serve startup switches.	
+engine/sha256.h	engine/runtime/sha256.h	runtime	SHA-256 for image and state digests. A leaf: standard library only.	Decision (Oct 10): a leaf that any file may include.
+engine/slot_checkpoint_io.h	engine/runtime/slot_checkpoint_io.h	runtime	Fragment after class Engine: slot checkpoint copies.	
+engine/slot_checkpoints.h	engine/runtime/slot_checkpoints.h	runtime	In-slot resume points.	
+engine/snapshot_bytes.h	engine/runtime/snapshot_bytes.h	runtime	Pinned snapshot chunk pool.	
+engine/spec_steps.h	engine/runtime/spec_steps.h	runtime	Speculative step timing.	
+engine/stage_arena.h	engine/runtime/stage_arena.h	runtime	Row buffer arena.	
+engine/state_disk.h	engine/runtime/state_disk.h	runtime	NVMe tier for conversation states.	
+engine/static_layout.h	engine/exl3/static_layout.h	exl3	Metadata-only weight sizing.	
+engine/switches.h	engine/switches.h	engine	The CRUCIBLE_* switch registry. A leaf: standard library only; every switch read goes through it.	Stays at engine/ (tools/layout.py LEAVES). Any module, kernels too, may include it.
+engine/vision.h	engine/model/flashnext/vision.h	model/flashnext	Vision encoder (a model part).	
+engine/warmup.h	engine/gfx1151/warmup.h	gfx1151	Page-migration warm-up for gfx1151 queues.	
+engine/weight_validation.h	engine/model/flashnext/weight_validation.h	model/flashnext	Supported tensor geometry checks.	
+kernels/exl3_gemm.h	engine/exl3/kernels/exl3_gemm.h	exl3/kernels	EXL3 WMMA prefill GEMM.	
+kernels/exl3_gemm_loader.h	bench/kernels/exl3_gemm_loader.h	bench	Bench-only kernel header; GEMM loader variant.	Decision (Oct 10): next to its benches, so that it moves once.
+kernels/exl3_gemm_pair.h	engine/exl3/kernels/exl3_gemm_pair.h	exl3/kernels	Two-tile GEMM body.	
+kernels/exl3_gemm_pipe.h	bench/kernels/exl3_gemm_pipe.h	bench	Bench-only kernel header; GEMM pipeline.	Decision (Oct 10): next to its benches, so that it moves once.
+kernels/exl3_gemm_stage.h	bench/kernels/exl3_gemm_stage.h	bench	Bench-only kernel header; packed-A stage.	Decision (Oct 10): next to its benches, so that it moves once.
+kernels/exl3_gemm_tiled.h	bench/kernels/exl3_gemm_tiled.h	bench	Bench-only kernel header.	Decision (Oct 10): next to its benches.
+kernels/exl3_gemv.h	engine/exl3/kernels/exl3_gemv.h	exl3/kernels	EXL3 trellis decode and GEMV.	
+kernels/exl3_moe_lut.h	bench/kernels/exl3_moe_lut.h	bench	Bench-only kernel header; codebook probe.	Decision (Oct 10): next to its benches, so that it moves once.
+kernels/exl3_moe_mid_probe.h	bench/kernels/exl3_moe_mid_probe.h	bench	Bench-only kernel header; MoE probe.	Decision (Oct 10): next to its benches, so that it moves once.
+kernels/exl3_moe_window.h	engine/exl3/kernels/exl3_moe_window.h	exl3/kernels	MoE A-fragment reuse window.	
+kernels/exl3_pack_x.h	bench/kernels/exl3_pack_x.h	bench	Bench-only kernel header.	Decision (Oct 10): next to its benches.
+kernels/hc_multirow.h	engine/layers/kernels/hc_multirow.h	layers/kernels	Multi-row HC kernels.	
+kernels/lds_stream_ring.h	engine/gfx1151/lds_stream_ring.h	gfx1151	LDS stream handoff primitive.	
+kernels/persistent_gdn_load.h	engine/layers/kernels/persistent_gdn_load.h	layers/kernels	Ordered GDN coefficient load.	
+kernels/persistent_sync.h	engine/gfx1151/persistent_sync.h	gfx1151	Compute-only barriers.	
+kernels/prefill_gdn.h	engine/layers/kernels/prefill_gdn.h	layers/kernels	Chunked GDN prefill.	
+kernels/prefill_gdn_packed.h	bench/kernels/prefill_gdn_packed.h	bench	Bench-only kernel header; packed GDN.	Decision (Oct 10): next to its benches, so that it moves once.
+bench/kernels/exl3_gemv.h	bench/kernels/exl3_gemv.h	bench	Bench-only kernel header: the 1-8 row EXL3 GEMV and the debug tile decoder from engine/exl3/kernels/exl3_gemv.h.	New file: no engine launch, so it leaves engine/.
+bench/kernels/exl3_ring.h	bench/kernels/exl3_ring.h	bench	Bench-only kernel header: the dense ring kernel LinRingKernel from engine/exl3/exl3_ring.h.	New file: no engine launch, so it leaves engine/.
+bench/kernels/hc_multirow.h	bench/kernels/hc_multirow.h	bench	Bench-only kernel header: HcRowsDotsRegister from engine/layers/kernels/hc_multirow.h.	New file: no engine launch, so it leaves engine/.
+bench/kernels/moe_rows.h	bench/kernels/moe_rows.h	bench	Bench-only kernel header: the unique-expert MoE path of ops.h and the first compact-row kernels of moe_rows.h.	New file: no engine launch, so it leaves engine/.
+bench/kernels/prefill_hc.h	bench/kernels/prefill_hc.h	bench	Bench-only kernel header: the first prefill HC stages and the HC dots and dense GEMM variants of prefill_hc.h.	New file: no engine launch, so it leaves engine/.
+bench/kernels/prefill_moe_route.h	bench/kernels/prefill_moe_route.h	bench	Bench-only kernel header: the pruned prefill MoE router of prefill_moe.h.	New file: no engine launch, so it leaves engine/.
+bench/kernels/qsa_decode.h	bench/kernels/qsa_decode.h	bench	Bench-only kernel header: the old QSA decode select and attention baselines of ops.h.	New file: no engine launch, so it leaves engine/.
+bench/kernels/prefill_gdn_lanes.h	bench/kernels/prefill_gdn_lanes.h	bench	Bench-only launch: the GDN lanes path before the vscan default, the reference of bench/gdn_vscan.hip and bench/prefill_gdn.hip.	New file (train 20, retire-pf19): CRUCIBLE_PF_GDN_VSCAN left, so the older launch leaves engine/.
+engine/layers/nonfinite_probe.h	engine/layers/nonfinite_probe.h	layers	Debug-build non-finite probes (CRUCIBLE_DEBUG_NONFINITE & 1): one device site word, the hidden-row scan, the host check. Owner: nan-contract.	New file (train 21).
+bench/kernels/prefill_qsa_pack.h	bench/kernels/prefill_qsa_pack.h	bench	Bench-only kernel header: QsaPrefillPackKernel from engine/layers/kernels/prefill_qsa.h, the reference of tests/qsa_prep_half_test.hip and two benches.	New file (train 20, retire-pf19): CRUCIBLE_PF_QSA_PREP_HALF left, so the kernel has no engine launch.
+kernels/prefill_moe.h	engine/layers/kernels/prefill_moe.h	layers/kernels	Expert-major prefill dispatch.	
+kernels/prefill_qsa.h	engine/layers/kernels/prefill_qsa.h	layers/kernels	QSA prefill kernels.	
+kernels/prefill_qsa_score.h	engine/layers/kernels/prefill_qsa_score.h	layers/kernels	QSA indexer scores.	
+kernels/prefill_qsa_score_sgpr.h	engine/layers/kernels/prefill_qsa_score_sgpr.h	layers/kernels	QSA scores with SGPR queries.	
+kernels/prefill_qsa_select.h	engine/layers/kernels/prefill_qsa_select.h	layers/kernels	Fused QSA top-512.	
+kernels/prefill_qsa_union.h	engine/layers/kernels/prefill_qsa_union.h	layers/kernels	QSA row-tile attention.	
+kernels/prefill_wmma.h	engine/gfx1151/prefill_wmma.h	gfx1151	Wave32 WMMA primitives.	
+kernels/vision.h	engine/layers/kernels/vision.h	layers/kernels	Vision tower kernels.	
+engine/gfx1151/README.md	engine/gfx1151/README.md	gfx1151	Module charter; the move puts it in place.	
+engine/exl3/README.md	engine/exl3/README.md	exl3	Module charter; the move puts it in place.	
+engine/exl3/kernels/README.md	engine/exl3/kernels/README.md	exl3/kernels	Module charter; the move puts it in place.	
+engine/layers/README.md	engine/layers/README.md	layers	Module charter; the move puts it in place.	
+engine/layers/kernels/README.md	engine/layers/kernels/README.md	layers/kernels	Module charter; the move puts it in place.	
+engine/model/flashnext/README.md	engine/model/flashnext/README.md	model/flashnext	Module charter; the move puts it in place.	
+engine/runtime/README.md	engine/runtime/README.md	runtime	Module charter; the move puts it in place.	
+engine/serve/README.md	engine/serve/README.md	serve	Module charter; the move puts it in place.	
+engine/cli/README.md	engine/cli/README.md	cli	Module charter; the move puts it in place.	

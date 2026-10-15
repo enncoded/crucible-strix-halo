@@ -1,0 +1,16 @@
+code_fibonacci "~/crucible-work/wt/suite/bench/suite/ids/code_fibonacci.txt" 160 8 0 -1
+code_fibonacci "~/crucible-work/wt/suite/bench/suite/ids/code_fibonacci.txt" 160 8 2 -1
+code_fibonacci "~/crucible-work/wt/suite/bench/suite/ids/code_fibonacci.txt" 160 8 0 0
+code_fibonacci "~/crucible-work/wt/suite/bench/suite/ids/code_fibonacci.txt" 160 8 2 0
+chat_planning "~/crucible-work/wt/suite/bench/suite/ids/chat_planning.txt" 160 8 0 -1
+chat_planning "~/crucible-work/wt/suite/bench/suite/ids/chat_planning.txt" 160 8 2 -1
+chat_planning "~/crucible-work/wt/suite/bench/suite/ids/chat_planning.txt" 160 8 0 0
+chat_planning "~/crucible-work/wt/suite/bench/suite/ids/chat_planning.txt" 160 8 2 0
+prose_story "~/crucible-work/wt/suite/bench/suite/ids/prose_story.txt" 160 8 0 -1
+prose_story "~/crucible-work/wt/suite/bench/suite/ids/prose_story.txt" 160 8 2 -1
+prose_story "~/crucible-work/wt/suite/bench/suite/ids/prose_story.txt" 160 8 0 0
+prose_story "~/crucible-work/wt/suite/bench/suite/ids/prose_story.txt" 160 8 2 0
+copy_python "~/crucible-work/wt/suite/bench/suite/ids/copy_python.txt" 160 8 0 -1
+copy_python "~/crucible-work/wt/suite/bench/suite/ids/copy_python.txt" 160 8 2 -1
+copy_python "~/crucible-work/wt/suite/bench/suite/ids/copy_python.txt" 160 8 0 0
+copy_python "~/crucible-work/wt/suite/bench/suite/ids/copy_python.txt" 160 8 2 0

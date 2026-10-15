@@ -1,0 +1,20 @@
+{
+  "files": 728,
+  "bytes": 11841026,
+  "tokens": 3237153,
+  "distinct_tokens": 32737,
+  "subsets": {
+    "16384": {
+      "corpus_coverage": 0.9027067920484451,
+      "blocks": 128
+    },
+    "32768": {
+      "corpus_coverage": 0.9519522246863216,
+      "blocks": 256
+    },
+    "65536": {
+      "corpus_coverage": 0.9877040102831098,
+      "blocks": 512
+    }
+  }
+}

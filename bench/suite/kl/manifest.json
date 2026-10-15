@@ -1,0 +1,12 @@
+{
+  "source": "explore d147d72:bench/explore/nx_prompts.py",
+  "prompts": {
+    "code-1024.ids": "0925876991282de983111c5beb06b48cc4615598d8d7262f3d4e8f38c8077869",
+    "chat-1024.ids": "ff3b9df29b3511f02f358227e6236dc18df135fe66e4cad0317de65e56235b8a",
+    "spanish-1024.ids": "2a47204494c3050db145d9113cd65448daad1f6810ae5449e97161102b4e648b",
+    "code-4096.ids": "c3568c61f2a3c4765c850cf66ba17eda8fc4119c2783b9ad5e47341cc3d0c289",
+    "chat-4096.ids": "22588b2e6379dc5fba16c250f192ff795f39773b364c06f08d3617222e1703cd",
+    "spanish-4096.ids": "dcb0c9bdd19da841ef6dcf4e5d5d3f1d079b524e32b3a242d4c4ae37df644064",
+    "code-16384.ids": "28c894fc2cd7def5a7ebad3902d7f6f1f31c6296a5f20a3456852fae62522e7f"
+  }
+}

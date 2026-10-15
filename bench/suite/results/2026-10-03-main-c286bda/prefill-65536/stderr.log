@@ -1,0 +1,6 @@
+loaded 84.45 GB in 22.9 s (26215 tasks)
+weight payload 84445712384 bytes, arena reserved 88474731520 bytes, staging peak 1136011264 bytes
+weights 84.45 GB, context 65547, prefill rows 4096
+warmup touched=94508370440 bytes buffers=1103 elapsed=4.208 s migration_wait=4 s status=ready
+memory ready: device free 35632234496 / 133143986176 bytes
+memory ready: MemAvailable:   35688488 kB

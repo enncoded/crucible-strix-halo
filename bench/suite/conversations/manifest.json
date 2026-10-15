@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+  "template_file": "chat_template.jinja",
+  "method": "Actual checkpoint Jinja template with tools; complete code records nearest each token target.",
+  "scripted_history": true,
+  "scenarios": [
+    {
+      "name": "4k",
+      "turns": [
+        {
+          "cache_prefix_tokens": 1090,
+          "turn": 0,
+          "messages_file": "4k/turn-0.json",
+          "ids_file": "4k/turn-0.ids.txt",
+          "tokens": 1097,
+          "target_tokens": 1096,
+          "shared_prefix_tokens": 0,
+          "new_tokens": 1097,
+          "ids_sha256": "1532c56439ca73e009f4bd477f77d69bf363870da3e37381e79121c342e4f037",
+          "messages_sha256": "cfb1345a6f169bef7c0b6082ef622d09b3252252bfe566bf644d5fa8eb7973d9"
+        },
+        {
+          "cache_prefix_tokens": 2614,
+          "turn": 1,
+          "messages_file": "4k/turn-1.json",
+          "ids_file": "4k/turn-1.ids.txt",
+          "tokens": 2621,
+          "target_tokens": 2596,
+          "shared_prefix_tokens": 1097,
+          "new_tokens": 1524,
+          "ids_sha256": "0509273d60e23776de105b21ab320e6c5300d4e4f2da736b7fe29459c22fe5af",
+          "messages_sha256": "a9732e7147f5be6af5cc781889f2e2aea82cec05f9e7e2252cfeaaef5146fd6b"
+        },
+        {
+          "cache_prefix_tokens": 4081,
+          "turn": 2,
+          "messages_file": "4k/turn-2.json",
+          "ids_file": "4k/turn-2.ids.txt",
+          "tokens": 4088,
+          "target_tokens": 4096,
+          "shared_prefix_tokens": 2621,
+          "new_tokens": 1467,
+          "ids_sha256": "8b18f78a9d6f3b7c3951af8eda39df2f50029e9a6ba5b58d9683a44d29bd50fd",
+          "messages_sha256": "a91f6c565d5dc9ddb5bf7c80e0bf1457b8ecf1214d5914e32542b33a4145fdbe"
+        }
+      ]
+    },
+    {
+      "name": "16k",
+      "turns": [
+        {
+          "cache_prefix_tokens": 13365,
+          "turn": 0,
+          "messages_file": "16k/turn-0.json",
+          "ids_file": "16k/turn-0.ids.txt",
+          "tokens": 13372,
+          "target_tokens": 13384,
+          "shared_prefix_tokens": 0,
+          "new_tokens": 13372,
+          "ids_sha256": "3ffd18e746cff616f7f86e59c46edf20be7fa6bf18765f86ad7120f374c96aef",
+          "messages_sha256": "be7d2644197b9433275302532a5ca2ee576a2d2ba255fd5cef4a749ff5b9d78e"
+        },
+        {
+          "cache_prefix_tokens": 14889,
+          "turn": 1,
+          "messages_file": "16k/turn-1.json",
+          "ids_file": "16k/turn-1.ids.txt",
+          "tokens": 14896,
+          "target_tokens": 14884,
+          "shared_prefix_tokens": 13372,
+          "new_tokens": 1524,
+          "ids_sha256": "5b9d815d5623b8f139a5eaa53354fb2d0ed9cf368e00c06e269ecfb9db5e8654",
+          "messages_sha256": "21307067169466f173668e247e44ab5ec3647c3fcdd42dc066ba1726f5e29496"
+        },
+        {
+          "cache_prefix_tokens": 16356,
+          "turn": 2,
+          "messages_file": "16k/turn-2.json",
+          "ids_file": "16k/turn-2.ids.txt",
+          "tokens": 16363,
+          "target_tokens": 16384,
+          "shared_prefix_tokens": 14896,
+          "new_tokens": 1467,
+          "ids_sha256": "7035e2c37da869b8965a7ff6e7578b7de3cee19b33e414f99aa1e9f7678515b0",
+          "messages_sha256": "1480562635dfdb44f8f1afd9e667dbe935d99a6a3fa02eeb07210eafb4b399ab"
+        }
+      ]
+    },
+    {
+      "name": "30k",
+      "turns": [
+        {
+          "cache_prefix_tokens": 27700,
+          "turn": 0,
+          "messages_file": "30k/turn-0.json",
+          "ids_file": "30k/turn-0.ids.txt",
+          "tokens": 27707,
+          "target_tokens": 27720,
+          "shared_prefix_tokens": 0,
+          "new_tokens": 27707,
+          "ids_sha256": "c4070c8acfcc52f9208e4aa6e7f1e7363a33e7fc1b854ee6d806766e3ba375f5",
+          "messages_sha256": "b8619fde8635139429c44dedb07b68ce6959413bae4db41a6015befded964b9b"
+        },
+        {
+          "cache_prefix_tokens": 29224,
+          "turn": 1,
+          "messages_file": "30k/turn-1.json",
+          "ids_file": "30k/turn-1.ids.txt",
+          "tokens": 29231,
+          "target_tokens": 29220,
+          "shared_prefix_tokens": 27707,
+          "new_tokens": 1524,
+          "ids_sha256": "b6a52bc058ecfa38aeeecdfaed74431a42d4882718ba527efa0d6be104f56184",
+          "messages_sha256": "e7ba29fe381f9ef098094afa39844fd355557d5aafc8ac368c4ee1abea911cdb"
+        },
+        {
+          "cache_prefix_tokens": 30691,
+          "turn": 2,
+          "messages_file": "30k/turn-2.json",
+          "ids_file": "30k/turn-2.ids.txt",
+          "tokens": 30698,
+          "target_tokens": 30720,
+          "shared_prefix_tokens": 29231,
+          "new_tokens": 1467,
+          "ids_sha256": "4808f47fad05325c354cc165d77792d706e13700bed9bd62015afa91ce9a3156",
+          "messages_sha256": "24b7ebc5f285d749a1765e00e9c8b34df5d7bf106cf5a8d93d4ed071b3457b5f"
+        }
+      ]
+    }
+  ]
+}

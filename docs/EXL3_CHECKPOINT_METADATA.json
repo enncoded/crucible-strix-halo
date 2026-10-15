@@ -1,0 +1,326 @@
+{
+  "source_commit": "d3739fd393337b1ff4d6c2a342b12f0c87a9592f",
+  "quant_repo": "turboderp/Qwen3.8-Flash-Next-exl3",
+  "quant_revision": "69e33439ae950f17bcbe95c98f117d80f759ab6d",
+  "original_revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+  "quantization_config": {
+    "quant_method": "exl3",
+    "version": "1.4.4",
+    "bits": 3.05,
+    "head_bits": 5,
+    "calibration": {
+      "rows": 250,
+      "cols": 2048
+    },
+    "out_scales": "always",
+    "codebook": "mul1",
+    "vision_bits": 5,
+    "mtp_bits": 3
+  },
+  "quant_shard": "model-00001-of-00007.safetensors",
+  "safetensors_data_base": 5732423,
+  "tensor_headers": {
+    "model.language_model.layers.0.mlp.experts.0.down_proj.suh": {
+      "dtype": "F16",
+      "shape": [
+        640
+      ],
+      "data_offsets": [
+        2223090932,
+        2223092212
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.down_proj.svh": {
+      "dtype": "F16",
+      "shape": [
+        2560
+      ],
+      "data_offsets": [
+        2223092212,
+        2223097332
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.down_proj.mul1": {
+      "dtype": "I32",
+      "shape": [],
+      "data_offsets": [
+        2223097332,
+        2223097336
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.down_proj.trellis": {
+      "dtype": "I16",
+      "shape": [
+        40,
+        160,
+        48
+      ],
+      "data_offsets": [
+        2223097336,
+        2223711736
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.gate_proj.suh": {
+      "dtype": "F16",
+      "shape": [
+        2560
+      ],
+      "data_offsets": [
+        2223711736,
+        2223716856
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.gate_proj.svh": {
+      "dtype": "F16",
+      "shape": [
+        640
+      ],
+      "data_offsets": [
+        2223716856,
+        2223718136
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.gate_proj.mul1": {
+      "dtype": "I32",
+      "shape": [],
+      "data_offsets": [
+        2223718136,
+        2223718140
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.gate_proj.trellis": {
+      "dtype": "I16",
+      "shape": [
+        160,
+        40,
+        48
+      ],
+      "data_offsets": [
+        2223718140,
+        2224332540
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.up_proj.suh": {
+      "dtype": "F16",
+      "shape": [
+        2560
+      ],
+      "data_offsets": [
+        2224332540,
+        2224337660
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.up_proj.svh": {
+      "dtype": "F16",
+      "shape": [
+        640
+      ],
+      "data_offsets": [
+        2224337660,
+        2224338940
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.up_proj.mul1": {
+      "dtype": "I32",
+      "shape": [],
+      "data_offsets": [
+        2224338940,
+        2224338944
+      ]
+    },
+    "model.language_model.layers.0.mlp.experts.0.up_proj.trellis": {
+      "dtype": "I16",
+      "shape": [
+        160,
+        40,
+        48
+      ],
+      "data_offsets": [
+        2224338944,
+        2224953344
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.down_proj.suh": {
+      "dtype": "F16",
+      "shape": [
+        640
+      ],
+      "data_offsets": [
+        2224953344,
+        2224954624
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.down_proj.svh": {
+      "dtype": "F16",
+      "shape": [
+        2560
+      ],
+      "data_offsets": [
+        2224954624,
+        2224959744
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.down_proj.mul1": {
+      "dtype": "I32",
+      "shape": [],
+      "data_offsets": [
+        2224959744,
+        2224959748
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.down_proj.trellis": {
+      "dtype": "I16",
+      "shape": [
+        40,
+        160,
+        80
+      ],
+      "data_offsets": [
+        2224959748,
+        2225983748
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.gate_proj.suh": {
+      "dtype": "F16",
+      "shape": [
+        2560
+      ],
+      "data_offsets": [
+        2225983748,
+        2225988868
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.gate_proj.svh": {
+      "dtype": "F16",
+      "shape": [
+        640
+      ],
+      "data_offsets": [
+        2225988868,
+        2225990148
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.gate_proj.mul1": {
+      "dtype": "I32",
+      "shape": [],
+      "data_offsets": [
+        2225990148,
+        2225990152
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.gate_proj.trellis": {
+      "dtype": "I16",
+      "shape": [
+        160,
+        40,
+        80
+      ],
+      "data_offsets": [
+        2225990152,
+        2227014152
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.up_proj.suh": {
+      "dtype": "F16",
+      "shape": [
+        2560
+      ],
+      "data_offsets": [
+        2227014152,
+        2227019272
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.up_proj.svh": {
+      "dtype": "F16",
+      "shape": [
+        640
+      ],
+      "data_offsets": [
+        2227019272,
+        2227020552
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.up_proj.mul1": {
+      "dtype": "I32",
+      "shape": [],
+      "data_offsets": [
+        2227020552,
+        2227020556
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert.up_proj.trellis": {
+      "dtype": "I16",
+      "shape": [
+        160,
+        40,
+        80
+      ],
+      "data_offsets": [
+        2227020556,
+        2228044556
+      ]
+    },
+    "model.language_model.layers.0.mlp.shared_expert_gate.weight": {
+      "dtype": "F16",
+      "shape": [
+        1,
+        2560
+      ],
+      "data_offsets": [
+        2228044556,
+        2228049676
+      ]
+    },
+    "model.language_model.layers.0.mlp.gate.weight": {
+      "dtype": "F16",
+      "shape": [
+        512,
+        2560
+      ],
+      "data_offsets": [
+        2228049676,
+        2230671116
+      ]
+    },
+    "model.language_model.layers.0.linear_attn.in_proj_qkv.suh": {
+      "dtype": "F16",
+      "shape": [
+        2560
+      ],
+      "data_offsets": [
+        2243880716,
+        2243885836
+      ]
+    },
+    "model.language_model.layers.0.linear_attn.in_proj_qkv.svh": {
+      "dtype": "F16",
+      "shape": [
+        10240
+      ],
+      "data_offsets": [
+        2243885836,
+        2243906316
+      ]
+    },
+    "model.language_model.layers.0.linear_attn.in_proj_qkv.mul1": {
+      "dtype": "I32",
+      "shape": [],
+      "data_offsets": [
+        2243906316,
+        2243906320
+      ]
+    },
+    "model.language_model.layers.0.linear_attn.in_proj_qkv.trellis": {
+      "dtype": "I16",
+      "shape": [
+        160,
+        640,
+        80
+      ],
+      "data_offsets": [
+        2243906320,
+        2260290320
+      ]
+    }
+  }
+}

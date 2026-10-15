@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "build": {
+    "source_branch": "origin/main",
+    "source_commit": "c286bda",
+    "bulk_prefill": true,
+    "source_dirty": null,
+    "source_identity": "operator-supplied archive",
+    "source_hashes": {
+      "bench/safetensors.h": "85f4151436f19259f6b4708f6908923ea04cc55529936f099724c195ad0d6b87",
+      "engine/bounds.h": "67831aac2559d88a22852d1e2442f5e15513e0cc346251bcd9c9429a26f879aa",
+      "engine/common.h": "2609d69e6f8a07d7c6c8d324b756c762ff53f024ab87fb731b9f6b1c7a668646",
+      "engine/decode_support.h": "b399988b737952d0b7437a624a31d5c39039713b9e18c28b774ad2f5e276e606",
+      "engine/dense_rows.h": "3fd2217b32995ae5a2cc2cfaf536bb2f9e54e8fdd5a1d23717e67f50d80c88c4",
+      "engine/draft_adapt.h": "503b4bfefb2c199d53e1f2a15921bb59a89dc66b925a263e42a553008f717242",
+      "engine/draft_dense.h": "af7cc25c6883cd8151f91fc57cdbf051cfe26cffe260b94fdbe77a5ceda1cbc2",
+      "engine/draft_ops.h": "ac5dfa55d6c2bb6ebb0f913579fe2102e6ca4f197ad2b31a2b810d79016e94ec",
+      "engine/draft_overlap.h": "3f78f0ac823e96b199b6f22b466f9df9412744471bdc2c698c6d4743dc5f3f7b",
+      "engine/draft_policy.h": "255ba4bf90109d0a79dd47cdcbbd285e1c9224792bd010cf25248d1f3539f2a7",
+      "engine/dump_io.h": "726eaeb42aa1af2c840839c372847a73e823d5f8c9bb981ec919a89e3e19f9da",
+      "engine/engine.hip": "98fdc408b09f11fbad8b1090e008b57f3b67ad51021859db56ca67d55d3d415c",
+      "engine/exl3.h": "25e013f55a5f5d710be34cb712bf518a2d156bd155f1bea461a33d5cfa7a5518",
+      "engine/expert_count.h": "9330d012da04d5274fb39514f6948fb1538d58727416c41b5130c1cc3220be11",
+      "engine/gen_cli.h": "0f16b7431237efc8b3c22e590ae71e6cc2832eaa328a96355f60b9edde3e6351",
+      "engine/generation.h": "ecfd9506080f6aaf8c4af1eaad4fc6864e400196d09e27e712025a31c2d5b1e5",
+      "engine/geometry.h": "24f376dbcae474e960e1615b7fda5d9dceb34921acfaa99624239bba87cc0b62",
+      "engine/migration_wait.h": "ac9848d923f81cc39ec268c332f296619b5f3e45245c10136a7812bc304ca3e9",
+      "engine/model.h": "c17805cf0c675542f1aaad378962d2766a33b345fc6a8dda158dba67b79ae162",
+      "engine/moe_rows.h": "4ae2d24ddd5c3ba077d84048babf3db182660ac7044ab566b2a07fabe044103a",
+      "engine/ops.h": "33623572a34d9008e69a759fc6a347c7e7daaa046b7cdbde916e553b2134abc1",
+      "engine/plans.h": "c39998a6d32fb02e814a21933768ad51e86f8e778f73a4ba3339f20ed5a23714",
+      "engine/prefill_bench.h": "dc734facdfb7b7cef06107380e0aafe68c5a33dfc298ce662d7b2896ae0e5ef4",
+      "engine/prefill_engine.inc": "c39c84f71ef3c88a6bb28cf0b8c220bc548d2495cf212a905306161ed5a9edf7",
+      "engine/prefill_hc.h": "28b1225b9c30b8fc47e11319a8143ca26dd94970a263617112e80da7fd28388e",
+      "engine/prefill_linear.h": "5cce73e7b723b9b21732f0a1da6184c1f8fd25ed62bdf5c0cc8ab8368274a94c",
+      "engine/prefill_moe.h": "95f48d7211703078b624916e7d401972cffcf6829a655fe7bdd6ae5db526c98e",
+      "engine/prefill_ple.h": "c7042c767283241cb00d07d6a53812aad886a4fbb6daae6983cb9074b633aa74",
+      "engine/qsa_capture.h": "2b8c8f45077ab7d981ed3bd452fe303289782261c9f26ea8eaaf82b0bc3a5532",
+      "engine/qsa_long.h": "b1aef6307b069de05697035fff15070c049c9bde5c15cbf09b4c6a7fd75030e8",
+      "engine/retained_prefix.h": "1dba43d07b2f0b8de76f97d06aea02a0b77d7336e88a0acca3a30964845548eb",
+      "engine/serve.h": "03c3fb12e0bcf59cc4ac22181a0756725fa225b42847b174926bbca6a87e3359",
+      "engine/serve_protocol.h": "ad212959dda6090679b7fddd053463e789a251e16faf95e4d4292f0dad7343d9",
+      "engine/spec_steps.h": "5310caa0f6753e1676f7ddadac8688534dad9df55c8fe77abc080c8efedf0ccb",
+      "engine/warmup.h": "2e881777c7f824116d99a84842e89ab1d139b6bfa7674452ed2e15fd322a9d82",
+      "engine/weight_validation.h": "6f9251dc4f5ce1b98b03b62863ade17a02499633daf6c9a4b0734534291aa99b",
+      "kernels/exl3_gemm.h": "0d795e5d778846730689797f97b0322250044daa1475ce063cb4676286980398",
+      "kernels/exl3_gemm_pipe.h": "d26da73d9311b0a35e3a5d8e6093338b1fc6f5e0bab0befbdb3131554cbd81f2",
+      "kernels/exl3_gemv.h": "d7f75df0d477969bc6956252c933494972ff6f1333370d04c299b92b46547b60",
+      "kernels/hc_multirow.h": "0c60291efbe7558ae2f26e91075bd919fe16343cf8a5fc1b52e264246da5773f",
+      "kernels/prefill_gdn.h": "5c45419345fb83e6e453def7c516994dc230908f88869be078b7df6c02b6b3ef",
+      "kernels/prefill_gdn_packed.h": "6e6c8c525531718c378ca9fe13a81446f76c127d401fc4c54eb1c76e1edc7c81",
+      "kernels/prefill_moe.h": "30f20a873a3d2e9935bd46b4f54f1558bdf3ae1ddc022c5ec3bafeff5d8bcf30",
+      "kernels/prefill_qsa.h": "79fa16d21e5cb5a0ecbe89729de0f9183f67e9146f9a49224229ca2e9e21fc80",
+      "kernels/prefill_qsa_union.h": "5287a07bb42b1d23f2011573f453c07749641da3129b3e18cc1d48512fdcb4d9",
+      "kernels/prefill_wmma.h": "3d50ae5364ad02df4a71cd22246fe205b89774b1db5403a3f6f329ef658bd030"
+    },
+    "harness_sha256": "835291c8193bff99a8cfd6451102b5badaad33e1c14698b6e5cc73a28d96b0b8",
+    "harness_headers": {
+      "full_head_policy.h": "300b0db14fb6f0090310d0aa5084755542b8985fbd4d5de53c9a1d3a36745cba"
+    },
+    "generation_policy": {
+      "draft_head": "full",
+      "draft_q": 0,
+      "lookup": 0
+    },
+    "command": [
+      "/opt/rocm/bin/hipcc",
+      "-O3",
+      "-std=c++20",
+      "--offload-arch=gfx1151",
+      "--rocm-path=/opt/rocm",
+      "-I/opt/rocm/include",
+      "-DCRUCIBLE_ENGINE_HEADER=\"~/crucible-work/wt/suite/source-main-c286bda/engine/engine.hip\"",
+      "-DCRUCIBLE_SUITE_PREFILL=1",
+      "~/crucible-work/wt/suite/bench/suite/resident.hip",
+      "-lpthread",
+      "-o",
+      "~/crucible-work/wt/suite/build/bench/suite-main-c286bda"
+    ],
+    "compiler": "HIP version: 7.2.53211-9999\nAMD clang version 22.0.0git (/srcdest/rocm-llvm f58b06dce1f9c15707c5f808fd002e18c2accf7e)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /opt/rocm/lib/llvm/bin\n",
+    "binary_sha256": "5dbee33289474fb41ca0322b1652bf197ad333b60aa449b5a17908792275fa29"
+  },
+  "host": {
+    "utc": "2026-10-03T08:33:19.829100+00:00",
+    "host": "the test machine",
+    "platform": "Linux-7.2.7-arch1-1-x86_64-with-glibc2.44",
+    "meminfo": "MemTotal:       131156796 kB\nMemFree:        48949232 kB\nMemAvailable:   83035888 kB\nBuffers:            7172 kB\nCached:         35102132 kB\nSwapCached:         1392 kB\nActive:           801864 kB\nInactive:       34393256 kB\nActive(anon):     124896 kB\nInactive(anon):    42432 kB\nActive(file):     676968 kB\nInactive(file): 34350824 kB\nUnevictable:       81396 kB\nMlocked:               0 kB\nSwapTotal:       8388604 kB\nSwapFree:        7946512 kB\nZswap:             34292 kB\nZswapped:          84448 kB\nDirty:              8608 kB\nWriteback:             0 kB\nAnonPages:        163068 kB\nMapped:            62048 kB\nShmem:                80 kB\nKReclaimable:     214724 kB\nSlab:             499624 kB\nSReclaimable:     214724 kB\nSUnreclaim:       284900 kB\nKernelStack:        9152 kB\nPageTables:        10440 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    73967000 kB\nCommitted_AS:    1431172 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      279936 kB\nVmallocChunk:          0 kB\nPercpu:            21760 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:     67584 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:    690176 kB\nFilePmdMapped:     18432 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nUnaccepted:            0 kB\nBalloon:               0 kB\nGPUActive:      45714260 kB\nGPUReclaim:            0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      506572 kB\nDirectMap2M:    76345344 kB\nDirectMap1G:    57671680 kB\n",
+    "buddyinfo": "Node 0, zone      DMA      0      0      0      0      0      0      0      0      1      1      2 \nNode 0, zone    DMA32    162    232    212    175    186    156    148    113     94     85    344 \nNode 0, zone   Normal  55855  26925  26957  30216  11436  16379  38131  20492  14753   3121    174 \n",
+    "environment": {
+      "HSA_USERPTR_FOR_PAGED_MEM": "0"
+    }
+  },
+  "runner_sha256": "425ad8a2047a82c258a532cb1832b345a30136828abe84af1f59d8af2ddddbab",
+  "rooflines_sha256": "7e8de212f416b9c9f9e26efc77e1ba62a819fcf2299552e632a0f42b4e9d3a71",
+  "corpus_sha256": "604bb2be6a6388a2190bd32f9149936511fda479ce82ad37a282b77c0d725ae5",
+  "checkpoint": "~/models/exl3/Qwen3.8-Flash-Next-exl3-3.05bpw_h5_ng5",
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "config_sha256": "92ce0839c71b5a39988299fe38206a32fea50586be54378d424fc0eb035a44c0",
+  "quantization_sha256": "c6ad4cb2f24b2d2cab6362e94a4646b8ffa3c76b08002595dd36de93c0028a91",
+  "load": {
+    "event": "ready",
+    "load_seconds": 38.758170485,
+    "max_rows": 8,
+    "draft_head": "full",
+    "draft_q": 0,
+    "lookup": 0
+  },
+  "prefill_rows": 4096,
+  "settings": {
+    "mode": "prefill",
+    "tokens": 1,
+    "chunk": 8,
+    "spec": 2,
+    "warmup": 0,
+    "repeat": 1
+  },
+  "ceilings": {
+    "dram_gbs": 245.5,
+    "wmma_f16_tflops": 49,
+    "serial_tps": 53.192131023332074,
+    "prefill_tps": 2310.0,
+    "spec_tps": null,
+    "prefill_fused_tps": 3866
+  },
+  "rows": [
+    {
+      "event": "result",
+      "name": "long_4096",
+      "repeat": 0,
+      "spec": 0,
+      "prompt_tokens": 4096,
+      "prefill_seconds": 3.430871863,
+      "ttft_seconds": 3.430871863,
+      "decode_seconds": 5.25e-06,
+      "forwards": 0,
+      "accepted": 0,
+      "proposed": 0,
+      "output_ids": [
+        27775
+      ],
+      "prefill_tps": 1193.8656305334596,
+      "decode_tps": null,
+      "acceptance_pct": null,
+      "tokens_per_forward": null,
+      "decode_ceiling_pct": null,
+      "prefill_ceiling_pct": 51.6824948282883,
+      "prompt_sha256": "f5f5f3574382a34a7291363e3e218cf0acfce7ba4d3be06f3e0dce10d4167a3f",
+      "prefill_fused_ceiling_pct": 30.8811596102809
+    }
+  ]
+}

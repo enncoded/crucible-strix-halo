@@ -1,0 +1,11 @@
+build/
+.venv/
+/models/
+/prompt.ids
+__pycache__/
+*.pyc
+ref/fixtures/
+.pytest_cache/
+.coverage
+.coverage
+scratch/

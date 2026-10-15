@@ -1,0 +1,193 @@
+[
+ {
+  "name": "q01",
+  "image": "terminal.png",
+  "question": "Which test failed? Give the test function name only.",
+  "answers": [
+   "test_evict_lru"
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q02",
+  "image": "terminal.png",
+  "question": "How many tests passed?",
+  "answers": [
+   "13"
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q03",
+  "image": "dialog.png",
+  "question": "What is the title of the dialog?",
+  "answers": [
+   "disk full"
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q04",
+  "image": "dialog.png",
+  "question": "How much free space does the dialog report?",
+  "answers": [
+   "12 mb",
+   "12mb"
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q05",
+  "image": "dialog.png",
+  "question": "Which two buttons does the dialog show?",
+  "answers": [
+   [
+    "retry",
+    "cancel"
+   ]
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q06",
+  "image": "tree.png",
+  "question": "Which folder contains vision.py?",
+  "answers": [
+   "server"
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q07",
+  "image": "tree.png",
+  "question": "Name the file in the tests folder.",
+  "answers": [
+   "multimodal_test.cpp"
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q08",
+  "image": "table.png",
+  "question": "Which region sold the most units in Q4, and how many?",
+  "answers": [
+   [
+    "west",
+    "310"
+   ]
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q09",
+  "image": "table.png",
+  "question": "What were the South region's Q2 sales?",
+  "answers": [
+   "87"
+  ],
+  "category": "screenshot"
+ },
+ {
+  "name": "q10",
+  "image": "chart_bar.png",
+  "question": "On which day were the most pull requests merged?",
+  "answers": [
+   "thu"
+  ],
+  "category": "chart"
+ },
+ {
+  "name": "q11",
+  "image": "chart_bar.png",
+  "question": "How many pull requests were merged on Wednesday?",
+  "answers": [
+   "9"
+  ],
+  "category": "chart"
+ },
+ {
+  "name": "q12",
+  "image": "chart_line.png",
+  "question": "In which month is the p99 latency highest?",
+  "answers": [
+   "jun"
+  ],
+  "category": "chart"
+ },
+ {
+  "name": "q13",
+  "image": "chart_line.png",
+  "question": "Does the p50 latency stay roughly flat or rise sharply? Answer flat or rise.",
+  "answers": [
+   "flat"
+  ],
+  "category": "chart"
+ },
+ {
+  "name": "q14",
+  "image": "chart_pie.png",
+  "question": "Which category has the largest cost share, and what percent?",
+  "answers": [
+   [
+    "gpu",
+    "45"
+   ]
+  ],
+  "category": "chart"
+ },
+ {
+  "name": "q15",
+  "image": "chart_pie.png",
+  "question": "What percent is Disk?",
+  "answers": [
+   "10"
+  ],
+  "category": "chart"
+ },
+ {
+  "name": "q16",
+  "image": "code_sum.jpg",
+  "question": "What is the default tax rate in this function? Answer with the number.",
+  "answers": [
+   "0.08"
+  ],
+  "category": "code"
+ },
+ {
+  "name": "q17",
+  "image": "code_sum.jpg",
+  "question": "To how many decimal places does the function round?",
+  "answers": [
+   "2",
+   "two"
+  ],
+  "category": "code"
+ },
+ {
+  "name": "q18",
+  "image": "code_bug.jpg",
+  "question": "The loop condition has an off-by-one bug. Reply with the corrected loop condition only.",
+  "answers": [
+   "i < values.length"
+  ],
+  "category": "code"
+ },
+ {
+  "name": "q19",
+  "image": "code_rust.jpg",
+  "question": "What is the smallest port this function accepts?",
+  "answers": [
+   "1024"
+  ],
+  "category": "code"
+ },
+ {
+  "name": "q20",
+  "image": "code_rust.jpg",
+  "question": "What is the function's name?",
+  "answers": [
+   "parse_port"
+  ],
+  "category": "code"
+ }
+]

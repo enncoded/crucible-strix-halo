@@ -1,0 +1,85 @@
+[
+ {
+  "type": "function",
+  "function": {
+   "name": "read_file",
+   "description": "Read a text file from the repository.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Relative path."
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "write_file",
+   "description": "Create or replace a text file in the repository.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Relative path."
+     },
+     "content": {
+      "type": "string",
+      "description": "Complete new file content."
+     }
+    },
+    "required": [
+     "path",
+     "content"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "run_command",
+   "description": "Run a shell command in the repository root and return its output.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "command": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "command"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "search_code",
+   "description": "Search the repository for a regular expression.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "pattern": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string",
+      "description": "Directory to search."
+     }
+    },
+    "required": [
+     "pattern"
+    ]
+   }
+  }
+ }
+]

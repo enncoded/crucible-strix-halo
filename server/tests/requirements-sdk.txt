@@ -1,0 +1,2 @@
+# CPU client checks only. The inference server does not need this SDK.
+openai==3.24.0

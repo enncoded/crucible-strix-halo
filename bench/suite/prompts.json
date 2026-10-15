@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "short": [
+    {"name": "code_fibonacci", "category": "code", "text": "Write a Python function fibonacci(n) that returns the first n Fibonacci numbers. Reject negative input with ValueError. Include type hints, a short docstring, and five unit tests. Return only code."},
+    {"name": "code_json", "category": "code", "text": "Write a Python function merge_records(lines) that reads JSON objects from an iterable of strings. Each object has an integer id and a string value. Keep the last value for each id and return objects sorted by id. Reject malformed records with a useful ValueError. Include tests. Return only code."},
+    {"name": "chat_planning", "category": "chat", "text": "I have two hours on Saturday to clean a small apartment and prepare lunch for three people. I have rice, lentils, carrots, and onions. Give me a practical schedule and a simple recipe. Explain which tasks I can do at the same time."},
+    {"name": "chat_explain", "category": "chat", "text": "Explain why the sky looks blue during the day and red near sunset. Assume I know basic science but not optics. Use one useful analogy, then explain where that analogy fails."},
+    {"name": "chat_spanish", "category": "chat", "text": "Explica en español cómo organizar una biblioteca pequeña de barrio. Incluye un sistema sencillo de préstamos, una forma de clasificar los libros y un plan para recibir donaciones. Usa ejemplos concretos."},
+    {"name": "prose_story", "category": "prose", "text": "Write the opening of a quiet story about a clock repairer who finds a letter inside an old pocket watch. Use concrete sensory details. Do not use magic, a dream, or a surprise inheritance. Keep the point of view in the third person."},
+    {"name": "prose_explain", "category": "prose", "text": "Write a clear guide to keeping a field notebook during a month of bird observations. Describe useful entries, weather records, uncertain identifications, and how to review the notes. Use complete paragraphs rather than a list."},
+    {"name": "copy_python", "category": "copy", "text": "Return the complete Python file below. Change only the default retry count from 3 to 5 and rename the variable delay to wait_seconds everywhere. Preserve all other code and comments.\n\nimport time\nfrom collections.abc import Callable\n\ndef retry(operation: Callable, attempts: int = 3, delay: float = 0.25):\n    \"\"\"Call operation until it succeeds or the attempts are exhausted.\"\"\"\n    last_error = None\n    for attempt in range(attempts):\n        try:\n            return operation()\n        except RuntimeError as error:\n            last_error = error\n            if attempt + 1 < attempts:\n                time.sleep(delay)\n    raise last_error\n\ndef main():\n    values = iter([1, 2, 3])\n    result = retry(lambda: next(values))\n    print(f\"Result: {result}\")\n\nif __name__ == \"__main__\":\n    main()\n"},
+    {"name": "copy_config", "category": "copy", "text": "Return this full configuration file. Change port to 9090 and retries to 5. Preserve every other value, section, and comment.\n\n# Local service settings\n[server]\nhost = \"127.0.0.1\"\nport = 8080\nworkers = 4\nread_timeout = 30\nwrite_timeout = 30\n\n[client]\nretries = 3\nbackoff = 0.25\nuser_agent = \"example-client\"\n\n[logging]\nlevel = \"info\"\nformat = \"json\"\ninclude_timestamp = true\n\n[storage]\ndirectory = \"./data\"\nmax_items = 10000\ncompression = false\n"}
+  ],
+  "long": {
+    "lengths": [4096, 16384, 65536],
+    "prefix": "Read the records below. Each record describes a small test service. The project code is CEDAR-427.\n",
+    "record": "Service cedar uses port 8123. Its owner is Mira. Backups run every Tuesday. Requests use a thirty-second timeout. Errors go to the local log.\n",
+    "suffix": "\nState the project code, service port, owner, backup day, and timeout. Then explain how you would check the service after a restart."
+  }
+}
