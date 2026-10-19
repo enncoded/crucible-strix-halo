@@ -69,4 +69,24 @@ struct SlotCheckpointIO {
     state.hist = point.hist;
     state.retained = buffer.retained;
   }
+  // the host snapshot of a Frontier point while the stream holds later rows.
+  // The buffer holds Spans(state, length) as Save copied them; the rows below the point are the stream's own, written
+  // once. So these are the bytes that ConversationStateIO::Save wrote at the point with target state (`r`: mpos 0).
+  // `E`: the engine (a template here: this runtime header names no serve-level type).
+  template <class E>
+  static std::shared_ptr<const ConversationSnapshot> SaveFrom(E& e, const SequenceState& state,
+      const Buffer& buffer, const crucible::SlotCheckpoint& point, const ConversationResume& r, float* stk,
+      float* carry, const SaveBase& base = {}) {
+    const size_t length = point.hist.size();
+    if (buffer.position != length || r.length != length || r.mpos != 0 || r.have_carry || length % 128 ||
+        state.hist.size() < length || !std::equal(point.hist.begin(), point.hist.end(), state.hist.begin()))
+      throw std::logic_error("slot frontier copy needs a grid point whose rows are still on the slot");
+    std::vector<ConversationStateIO::SpanSource> sources;
+    size_t offset = 0;
+    for (const auto& span : Spans(state, length)) {
+      sources.push_back({span.pointer, buffer.device + offset, span.bytes});
+      offset += span.bytes;
+    }
+    return ConversationStateIO::SaveAt(e, state, r, stk, carry, base, point.hist, buffer.retained, sources);
+  }
 };

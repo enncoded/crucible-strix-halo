@@ -65,7 +65,12 @@ def done_event(id, state):
                  finish_reason="length", prefill_seconds=0, decode_seconds=0)
     if os.environ.get("FAKE_DRAFT_STATS") == "1" and state["request"]["spec"] > 0 and state["request"]["max_tokens"] > 1:
         # As engine/serve/batch_session.h BatchDraftFields: a speculative request's counters, fixed numbers here.
-        event.update(draft_proposed=40, draft_accepted=22, spec_steps=11)
+        event.update(draft_proposed=40, draft_accepted=22, spec_steps=11, draft_passes=14, draft_ms=21.5,
+                     draft_pos_proposed=[11, 9, 7, 5, 4, 2, 2], draft_pos_tested=[11, 9, 6, 4, 2, 1, 0],
+                     draft_pos_accepted=[9, 6, 4, 2, 1, 0, 0], draft_len_hist=[0, 2, 2, 2, 1, 2, 0, 2])
+        if state["request"].get("draft_detail") == 1:  # per-token counters, equal to the position arrays above: 71 is missed for 99
+            event.update(draft_tally=[[70, 1, 11, 9], [71, 2, 9, 6], [72, 3, 6, 4], [73, 4, 4, 2], [74, 5, 2, 1], [75, 6, 1, 0]], draft_miss=[[71, 2, 99, 2]], draft_detail_cut=0,
+                         draft_lookup_rounds=0)
     if cache_enabled:
         # This fixture checks metadata transport, not device snapshot exactness.
         event.update(cached_tokens=state["cached"], cache_class="shared")

@@ -36,6 +36,9 @@ struct FakePrefillEngine : FakeEngine {
   std::vector<float> stacks = std::vector<float>(5 * kWide);
   int PrefillRows() const { return prefill_rows; }
   float* PromptStacks() { return stacks.data(); }
+  void CopyPrefillStacks(float* dst, int first, int rows) {
+    std::memcpy(dst, hidden.data() + (size_t)first * kWide, (size_t)rows * kWide * sizeof(float));
+  }
   std::vector<int> Prefill(const int* t, int R, const std::string&, bool predict, const void* = nullptr, int = 0) {
     ++prefill_calls;
     assert(retained.Forward(R, 0, R).empty());

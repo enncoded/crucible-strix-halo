@@ -1,4 +1,6 @@
 #include "../engine/serve/batch_session.h"
+#include "../engine/serve/batch_conversation_cache.h"
+#include "../engine/serve/batch_mtp_history.h"
 #include <cassert>
 #include <unistd.h>
 #include <map>
@@ -382,6 +384,68 @@ int main() {
     session.Close(96);
     assert((chunks == std::vector<std::string>{"0+12", "12+4", "16+4", "20+1"}));
   }
+  // an identical re-send whose prompt frontier lies inside its MTP window (len - window < f < len). The hooks
+  // mirror BatchPrefixCache (Find with BatchRestoreLimit, capture on the frontiers of BatchCacheFrontiers). 23 rows,
+  // boundary 21, grid 4, window 6 (warm-up from 17): the cold send saves 20; the re-send restores 20 and runs one
+  // bulk Prefill(20, 3, keep 0), the same call as the cold send's last chunk.
+  {
+    struct Snap { std::vector<int> hist; crucible::ConversationResume resume; };
+    MockEngine engine; engine.prefill_rows = 4; engine.launch_rows = 16;
+    crucible::BatchSession<MockEngine> session(engine, 1);
+    crucible::BatchConversationCache<Snap> cache(1 << 20, {}, 1, 0);
+    crucible::ConversationPolicy policy;
+    policy.prefill_rows = 4;
+    crucible::BatchCacheHooks cache_hooks;
+    cache_hooks.restore = [&](const crucible::ServeRequest& r) -> crucible::BatchRestore {
+      const auto entry = cache.Find(r.ids, policy, size_t(r.cache_prefix_tokens), crucible::BatchRestoreLimit(r), 4);
+      if (!entry) return 0;
+      engine.histories[engine.selected] = entry->snapshot->hist;
+      return {entry->snapshot->hist.size()};
+    };
+    cache_hooks.capture = [&](const crucible::ServeRequest& r, size_t cursor) {
+      for (const auto& frontier : crucible::BatchCacheFrontiers(r.ids.size(), size_t(r.cache_prefix_tokens), 4))
+        if (frontier.position == cursor)
+          assert(cache.Capture(r.ids, policy, frontier, 64, uint64_t(9) << 30, [&] {
+            return std::make_shared<const Snap>(Snap{std::vector<int>(r.ids.begin(), r.ids.begin() + std::ptrdiff_t(cursor)),
+                                                     crucible::BatchFrontierResume(cursor, size_t(r.cache_prefix_tokens))});
+          }));
+    };
+    cache_hooks.next_capture = [](const crucible::ServeRequest& r, size_t cursor) {
+      size_t next = SIZE_MAX;
+      for (const auto& frontier : crucible::BatchCacheFrontiers(r.ids.size(), size_t(r.cache_prefix_tokens), 4))
+        if (frontier.position > cursor) next = std::min(next, frontier.position);
+      return next;
+    };
+    cache_hooks.bytes = [&] { return cache.Bytes(); };
+    session.SetCacheHooks(cache_hooks);
+    std::vector<size_t> opened;
+    crucible::BatchSpecHooks hooks;
+    hooks.check = [](const crucible::ServeRequest&) { return std::string(); };
+    hooks.open = [&](uint64_t, int, const crucible::ServeRequest&, size_t cached) { opened.push_back(cached); };
+    hooks.chunk = [](uint64_t, size_t, int, bool) {};
+    hooks.stacks = [](uint64_t, size_t start, int rows) { return crucible::DraftWarmupRow(start, rows, 17); };
+    hooks.first = [](uint64_t, int) {};
+    hooks.step = [](uint64_t, int last, size_t, uint64_t) { return std::vector<int>{last + 1}; };
+    hooks.close = [](uint64_t) {};
+    session.SetSpecHooks(hooks);
+    auto request = Request(1, 4); request.spec = 7; request.mtp_prefix = 6; request.cache_prefix_tokens = 21;
+    request.ids.resize(23); std::iota(request.ids.begin(), request.ids.end(), 1);
+    const auto send = [&](uint64_t id) {
+      engine.chunks.clear(); engine.keeps.clear();
+      auto events = session.Open(id, request, true);
+      while (events.empty() || !events.back().token) events = session.Prefill(id);
+      assert(engine.histories[0] == request.ids);
+      const int token = *events.back().token;
+      session.Close(id);
+      return std::make_tuple(token, engine.chunks, engine.keeps);
+    };
+    const auto [cold_token, cold_chunks, cold_keeps] = send(98);
+    assert((cold_chunks == std::vector<int>{-16, -4, -3}) && (cold_keeps == std::vector<int>{16, 1, 0}));
+    const auto [token, chunks, keeps] = send(99);
+    assert((opened == std::vector<size_t>{0, 20}));
+    assert((chunks == std::vector<int>{cold_chunks.back()}) && (keeps == std::vector<int>{cold_keeps.back()}));
+    assert(token == cold_token);
+  }
 
   // Slot classes: a request takes the smallest free slot that holds it; the full slot stays for long turns.
   MockEngine classed_engine;
@@ -652,10 +716,13 @@ int main() {
     // A tail-like resume: one small-row forward first.
     assert(engine.chunks.front() > 0 && engine.chunks.front() <= crucible::kMaxRows);
     const auto split_tail = host.back();
-    // A prompt that drops the output (reasoning) also resumes at the prompt end on its slot.
+    // A prompt that drops the output (reasoning) of request 1 branches back to request 1's prompt end (10). With
+    // two general points a slot (the third buffer holds only frontiers) request 2's grid point
+    // (14) and prompt end (18) have replaced it, so no point serves this branch: it restores from the host cache. Three points resumed it at 10. This fake's
+    // host cache holds only full tails, none a prefix of this prompt, so the branch prefills from row 0.
     auto drop = a; drop.ids.insert(drop.ids.end(), {12, 12, 12});
     finish(3, drop, &cached, &resumed);
-    assert(resumed && cached == 10 && engine.selected == 0);
+    assert(!resumed && cached == 0 && std::count(log.begin(), log.end(), "load slot=0 at 10") == 1);
     // A turn that repeats the slot's tail resumes from the slot and keeps the points below it.
     auto again = drop; again.ids = host.back(); again.ids.push_back(9);
     finish(4, again, &cached, &resumed);
@@ -1041,6 +1108,15 @@ int main() {
   assert(window[2].draft && window[2].draft->proposed == 9 && window[2].draft->accepted == 4 && window[2].draft->steps == 2);
   assert(crucible::BatchDraftFields(window[2]) == ",\"draft_proposed\":9,\"draft_accepted\":4,\"spec_steps\":2");
   assert(crucible::BatchDraftFields(window[1]).empty());
+  {  // The position and token counters follow the three scalars when the decoder reports them.
+    crucible::BatchEvent counted = window[2];
+    counted.draft->tally.emplace();
+    counted.draft->tally->Round(std::vector<int>{1, 2}, 1, 3, false);
+    counted.draft->tally->Pass(0.5);
+    const std::string fields = crucible::BatchDraftFields(counted);
+    assert(fields.rfind(",\"draft_proposed\":9,\"draft_accepted\":4,\"spec_steps\":2,\"draft_pos_proposed\":[1,1,0", 0) == 0);
+    assert(fields.find("\"draft_ms\":0.500") != std::string::npos);
+  }
   assert((hook_calls == std::vector<std::string>{"open 72 0 0", "chunk 0 4 bulk", "chunk 4 2 bulk", "first 7",
                                             "step 7", "step 10", "stats 72", "close 72"}));
   assert((spec_engine.keeps == std::vector<int>{4, 1}));

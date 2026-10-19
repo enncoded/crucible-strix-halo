@@ -9,11 +9,19 @@ Every message is synthetic and seeded: about 12K tokens of system prompt and 23 
 its own 24K-token start, up to about 44K, on the h2h layout (4 x 131072 slots, 10 GiB cache). max_tokens 768 makes
 the answer room close every think block after one token, so each turn runs a continuation job. The client sends
 back the answer without the reasoning, as h2h_decode.py and many clients do, so the next prompt never repeats a
-think turn's tail. `served3` runs three such sessions on the served layout.
+think turn's tail. `served3` runs three such sessions on the served layout. `agents6` runs six (the 6-slot candidate
+B of an earlier change; the chain gives its layout with --server-args).
 
 Rule: a later turn of a session re-prefills at most its appended tokens (this prompt minus the previous one) plus
 --margin (4096, one prefill chunk). With --expect-replay it also re-prefills at most the tokens after the previous
 turn's output plus --replay-margin. The served build broke the first rule from 94K (53248 cached forever).
+
+--image-first WxH: one cold request with one synthetic screenshot before the sessions, so the encoder
+scratch and the image buffers hold their memory for the whole soak. A failed image request is an ERROR.
+--memory-floor-mib N (needs --tree): sample MemAvailable each second (this host) from server ready to the end
+of the soak. A soak can end before its cache is full (S5-long fills about 20.6 of 25.0 GB), so the rule projects the
+lowest value to a full cache: lowest MemAvailable - (cache budget - slot checkpoints - entry high-water), from the server
+log. A projection under N makes a PASS a FAIL (rule "memory"). No sample or no cache record is an ERROR.
 
 Crucible: --tree/--engine/--checkpoint start that tree's own server on 127.0.0.1:8794 (never 8790) with the served
 flags. Any other server: --url. Exit 0 PASS, 1 FAIL, 2 ERROR.
@@ -23,6 +31,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shlex
 import subprocess
 import sys
@@ -38,7 +47,9 @@ SERVED = ("--streams 3 --ctx 262144 --short-streams 2 --short-ctx 131072 --prefi
 # The decode worker's h2h layout (Oct 6 failure).
 H2H = ("--streams 4 --ctx 131072 --prefill 4096 --conversation-cache-mib 10240 --clamp-max-tokens "
        "--default-thinking on --max-body-mib 16")
-AGENT_SCENARIOS = {"agents": (4, H2H), "served3": (3, SERVED)}
+# agents6 (train 22): the agents sessions, six at once, on the h2h layout with 6 slots.
+H2H6 = H2H.replace("--streams 4 ", "--streams 6 ")
+AGENT_SCENARIOS = {"agents": (4, H2H), "agents6": (6, H2H6), "served3": (3, SERVED)}
 # The incident's appended tokens per turn (numbers only): small steps, then about 20K per turn.
 STEPS = (690, 435, 750, 5550, 800, 1700, 4700, 5250, 720, 1500, 560, 1900, 1950, 1600, 600, 700, 1250, 740,
          20450, 19950, 19500, 19150, 21500, 20500, 24400, 4000, 3700, 18750, 2900, 9850)
@@ -280,6 +291,109 @@ def file_sha256(path):
         return None
 
 
+MEMINFO = "/proc/meminfo"
+
+
+def memavailable_kb(path=MEMINFO):
+    """MemAvailable of this host in kB, or None when the file has no readable line."""
+    try:
+        with open(path) as file:
+            for line in file:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+class MemorySampler(threading.Thread):
+    """The lowest MemAvailable while the soak runs (one read per interval)."""
+
+    def __init__(self, interval=1.0, path=MEMINFO, read=memavailable_kb):
+        super().__init__(daemon=True)
+        self.interval, self.path, self.read, self.lowest_kb, self.samples = interval, path, read, None, 0
+        self.stopped = threading.Event()
+
+    def run(self):
+        while True:
+            value = self.read(self.path)
+            if value is not None:
+                self.samples += 1
+                self.lowest_kb = value if self.lowest_kb is None else min(self.lowest_kb, value)
+            if self.stopped.wait(self.interval):
+                return
+
+    def stop(self):
+        self.stopped.set()
+        if self.ident is not None:  # a server that did not start leaves the sampler unstarted
+            self.join(timeout=5)
+
+
+CACHE_BUDGET = re.compile(r"^conversation cache: (\d+) bytes budget", re.M)
+CHECKPOINT_BYTES = re.compile(r"^slot checkpoints: .* (\d+) bytes from the cache budget$", re.M)
+TURN_CACHE_BYTES = re.compile(r'^crucible_turn \{.*"cache_bytes": (\d+)', re.M)
+
+
+def cache_record(log_text):
+    """The cache budget, the slot checkpoints in it and the entry high-water from a server log, or None."""
+    budget, used = CACHE_BUDGET.search(log_text), [int(value) for value in TURN_CACHE_BYTES.findall(log_text)]
+    if budget is None or not used:
+        return None
+    checkpoints = CHECKPOINT_BYTES.search(log_text)
+    return dict(budget_bytes=int(budget[1]), checkpoint_bytes=int(checkpoints[1]) if checkpoints else 0,
+                high_water_bytes=max(used))
+
+
+def apply_memory_floor(report, lowest_kb, samples, floor_mib, cache=None):
+    """The memory record, and a FAIL when a PASS, projected to a full cache, went under the floor.
+
+    The cache part that the soak did not fill still costs host memory in daily use, so it comes off the lowest value.
+    No sample or no cache record is an ERROR.
+    """
+    lowest = None if lowest_kb is None else lowest_kb // 1024
+    memory = dict(lowest_memavailable_mib=lowest, samples=samples, floor_mib=floor_mib)
+    if cache is not None:
+        unfilled = max(0, cache["budget_bytes"] - cache["checkpoint_bytes"] - cache["high_water_bytes"]) >> 20
+        memory.update(cache, unfilled_mib=unfilled, projected_memavailable_mib=None if lowest is None else lowest - unfilled)
+    report = dict(report, memory=memory)
+    if floor_mib is None:
+        return report
+    if lowest is None or cache is None:
+        why = "no MemAvailable sample" if lowest is None else "no cache record in the server log"
+        return dict(report, verdict="ERROR", error=report.get("error") or why)
+    projected = memory["projected_memavailable_mib"]
+    if projected < floor_mib and report["verdict"] == "PASS":
+        failure = dict(rule="memory", lowest_memavailable_mib=lowest, unfilled_mib=memory["unfilled_mib"],
+                       projected_memavailable_mib=projected, floor_mib=floor_mib)
+        return dict(report, verdict="FAIL", failures=report["failures"] + [failure])
+    return report
+
+
+def image_first(url, model, size, timeout):
+    """One cold request with one synthetic screenshot of SIZE (WxH). Returns the record; raises on an HTTP error."""
+    from vision_session import screenshot
+    width, height = (int(value) for value in size.split("x"))
+    body = dict(model=model, max_tokens=1, temperature=0, stream=False, cache_control="bypass",
+                chat_template_kwargs=dict(enable_thinking=False),
+                messages=[dict(role="user", content=[dict(type="image_url", image_url=dict(url=screenshot(1, width, height))),
+                                                      dict(type="text", text="What is the large number? Answer with it.")])])
+    request = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+    start = time.monotonic()
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        usage = json.loads(response.read()).get("usage") or {}
+        status = response.status
+    return dict(size=size, status=status, prompt_tokens=usage.get("prompt_tokens"),
+                seconds=round(time.monotonic() - start, 3))
+
+
+def image_size(value):
+    width, _, height = value.partition("x")
+    if not (width.isdigit() and height.isdigit() and int(width) > 0 and int(height) > 0):
+        raise argparse.ArgumentTypeError("use WIDTHxHEIGHT, for example 2560x1440")
+    return value
+
+
 def switch_environment(environ):
     """The CRUCIBLE_* variables of this process; the server inherits them (the gate checks them)."""
     return {name: value for name, value in sorted(environ.items()) if name.startswith("CRUCIBLE_")}
@@ -317,6 +431,10 @@ def main():
     parser.add_argument("--margin", type=int, default=4096)
     parser.add_argument("--replay-margin", type=int, default=64)
     parser.add_argument("--expect-replay", action="store_true")
+    parser.add_argument("--image-first", type=image_size, default=None, metavar="WxH",
+                        help="one cold image request before the sessions; the server needs --vision")
+    parser.add_argument("--memory-floor-mib", type=int, default=None,
+                        help="lowest MemAvailable (MiB, this host) for a PASS")
     args = parser.parse_args()
     agents = AGENT_SCENARIOS.get(args.scenario)
     if args.server_args is None:
@@ -330,8 +448,11 @@ def main():
     args.started = time.monotonic()
     if bool(args.url) == bool(args.tree) or (args.tree and not (args.engine and args.checkpoint)):
         parser.error("give --url, or --tree with --engine and --checkpoint")
-    rows, lock, process, model, error = [], threading.Lock(), None, args.model, None
+    if args.memory_floor_mib is not None and not args.tree:
+        parser.error("--memory-floor-mib needs --tree (the cache record is in the server log)")
+    rows, lock, process, model, error, first = [], threading.Lock(), None, args.model, None, None
     log = open(args.output.with_suffix(".server.log"), "w") if args.tree else None
+    sampler = MemorySampler() if args.memory_floor_mib is not None else None
     try:
         if args.tree:
             process, model = start_server(args, log)
@@ -339,6 +460,10 @@ def main():
         elif not model:
             with urllib.request.urlopen(args.url + "/v1/models", timeout=30) as response:
                 model = json.loads(response.read())["data"][0]["id"]
+        if sampler:  # from a ready server on: the soak's memory, not the checkpoint load
+            sampler.start()
+        if args.image_first:
+            first = image_first(args.url, model, args.image_first, args.request_timeout)
         if agents:
             plan = [(f"agent-{index}", "agent") for index in range(agents[0])]
         else:
@@ -359,6 +484,8 @@ def main():
     except Exception as exc:
         error = str(exc)
     finally:
+        if sampler:
+            sampler.stop()
         if process is not None:
             process.terminate()
             try:
@@ -368,9 +495,15 @@ def main():
     report = check(rows, args.margin, args.replay_margin, args.expect_replay)
     if error:
         report = dict(report, verdict="ERROR", error=error)
+    if sampler:
+        cache = cache_record(args.output.with_suffix(".server.log").read_text(errors="replace"))
+        report = apply_memory_floor(report, sampler.lowest_kb, sampler.samples, args.memory_floor_mib, cache)
+    if args.image_first:
+        report = dict(report, image_first=first)
     report = dict(report, scenario=args.scenario, url=args.url, model=model, tree=str(args.tree or ""),
                   environment=switch_environment(os.environ), engine_sha256=file_sha256(args.engine),
                   engine=str(args.engine or ""), server_args=args.server_args if args.tree else None,
+                  checkpoint=str(args.checkpoint or "") if args.tree else None,
                   max_prompt=max([r["prompt_tokens"] or 0 for r in rows] or [0]),
                   stopped_by_deadline=any(r.get("stopped_by_deadline") for r in rows), turns=rows)
     args.output.write_text(json.dumps(report, indent=1) + "\n")

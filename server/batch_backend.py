@@ -10,8 +10,8 @@ from .api import MAX_MTP_WINDOW, MTP_WINDOW, ApiError
 from . import metrics
 from .engine_messages import ENGINE_REJECTED, IMAGE_FAILED, ProtocolError
 from .backend import EngineBackend, LOOKUP_DEPTH, MAX_CONVERSATION_CACHE_MIB, QUEUED_SECONDS
-from .batch_scheduler import (INTERLEAVE_MIN_ROWS, PACK_ENTER, PASS_EVENTS, MODEL_LAYERS, PendingPrefill, choose,
-                              interleave_passes, packed_mode)
+from .batch_scheduler import (ENCODER_SLICE_BAND, ENCODER_SLICE_SECONDS, INTERLEAVE_MIN_ROWS, PACK_ENTER, PASS_EVENTS, MODEL_LAYERS,
+                              PendingPrefill, choose, encoder_rows, interleave_passes, packed_mode)
 
 SMALL_ROW_CHUNK = 8
 # Row caps of a decode pass, copied from engine/runtime/packed_rows_option.h for the crucible_turn row counter only.
@@ -75,6 +75,7 @@ class BatchedEngineBackend(EngineBackend):
     counts_stall = True
     packed_rows = ""  # CRUCIBLE_PACKED_ROWS as the engine reads it; set in __init__
     prefill_interleave = 0
+    encoder_slice_seconds = ENCODER_SLICE_SECONDS  # an average of the slice commands run; see encoder_rows
     interleave_min_rows = INTERLEAVE_MIN_ROWS
     kept = None  # set in __init__; None in tests that build the worker without it
     state_disk = False  # the disk tier; set from the engine's ready event
@@ -596,10 +597,14 @@ class BatchedEngineBackend(EngineBackend):
         return entry.job.payload["spec"] > 0 and entry.job.payload["max_tokens"] > 1
 
     def _pending_prefills(self):
-        return [PendingPrefill(id, len(entry.job.payload["ids"]) - entry.prefilled, entry.admitted_at,
-                               entry.job.after is not None)
+        return [PendingPrefill(id, len(entry.job.payload["ids"]) - entry.prefilled + self._encoder_rows(entry),
+                               entry.admitted_at, entry.job.after is not None)
                 for id, entry in self.active.items()
                 if not entry.ready and not entry.job.cancelled.is_set()]
+
+    def _encoder_rows(self, entry):
+        if not entry.vision_slices: return 0
+        return encoder_rows(entry.vision_slices, self.encoder_slice_seconds, self.prefill_rate)
 
     def _prefill(self, id):
         entry = self.active[id]
@@ -624,6 +629,10 @@ class BatchedEngineBackend(EngineBackend):
             # No cursor from an engine that reports slices: the command ran one encoder slice and no prompt row.
             entry.vision_slices -= 1
             rows = 0
+            # One slice, about 76 ms. A command with decoders attached or a failed slice is no slice time.
+            if elapsed > 0 and not decoders and id in self.active:
+                sample = min(max(elapsed, ENCODER_SLICE_BAND[0]), ENCODER_SLICE_BAND[1])
+                self.encoder_slice_seconds = .7 * self.encoder_slice_seconds + .3 * sample
         entry.prefilled += rows
         head, entry.restored = entry.restored, False
         if id in self.active:

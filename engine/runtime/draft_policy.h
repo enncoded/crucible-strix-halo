@@ -5,6 +5,9 @@
 #include <charconv>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <stdexcept>
 #include <unordered_map>
@@ -38,6 +41,50 @@ inline std::vector<int> ParseDraftSelection(const std::string& text) {
     if (end == std::string::npos) return ids;
     start = end + 1;
   }
+}
+
+// serve --draft-blocks: the block IDs of a served head file. Every fault gives one fixed text, so that
+// the startup error never quotes the file.
+inline std::vector<int> ServeDraftBlocks(const std::string& text, int limit) {
+  if (std::all_of(text.begin(), text.end(), [](char c) { return std::isspace((unsigned char)c); }))
+    throw std::invalid_argument("draft-blocks file is empty");
+  std::vector<int> blocks;
+  try {
+    blocks = ParseDraftSelection(text);
+  } catch (const std::invalid_argument&) {
+    blocks.clear();
+  }
+  if (!ValidDraftSelection(blocks, limit))
+    throw std::invalid_argument("draft-blocks needs sorted unique block IDs in the vocabulary");
+  return blocks;
+}
+
+// The full selection (1940 blocks) is about 10 KB; a larger file is no head file.
+inline constexpr std::size_t kDraftBlocksFileMax = 64 * 1024;
+
+// serve --draft-blocks FILE: read and check the head file before the model loads.
+inline std::vector<int> ReadServeDraftBlocks(const std::string& path, int limit) {
+  std::error_code error;
+  const auto status = std::filesystem::status(path, error);
+  if (error || !std::filesystem::exists(status)) throw std::runtime_error("draft-blocks file could not be read");
+  if (!std::filesystem::is_regular_file(status)) throw std::runtime_error("draft-blocks file must be a regular file");
+  std::ifstream file(path, std::ios::binary);
+  std::string text(kDraftBlocksFileMax + 1, '\0');
+  if (!file || (!file.read(text.data(), text.size()) && !file.eof()))
+    throw std::runtime_error("draft-blocks file could not be read");
+  text.resize(file.gcount());
+  if (text.size() > kDraftBlocksFileMax) throw std::invalid_argument("draft-blocks file is larger than 64 KiB");
+  return ServeDraftBlocks(text, limit);
+}
+
+// The serve startup line of a --draft-blocks head: its size and the built-in head's size (one block is 128 head
+// rows of token_bytes each), so a memory budget sees what a larger head costs.
+inline std::string ServeDraftHeadLine(int blocks, int default_blocks, std::size_t token_bytes) {
+  char line[160];
+  std::snprintf(line, sizeof line,
+                "serve draft head: %d blocks from --draft-blocks, %.2f MB (the built-in head: %d blocks, %.2f MB)",
+                blocks, blocks * 128.0 * token_bytes / 1e6, default_blocks, default_blocks * 128.0 * token_bytes / 1e6);
+  return line;
 }
 
 // Prefer the longest matching suffix, then its latest occurrence. Only copy

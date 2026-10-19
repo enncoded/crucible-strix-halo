@@ -115,7 +115,10 @@ class Engine {
     lookahead_.Init(m_.static_base, m_.static_bytes, streaming);
     // Row buffers hold a packed verify pass (kPackedRows) or one bulk launch (PrefillLaunchRows() rows).
     const int capacity = std::max(kPackedRows, pf_launch_rows_);
-    H_ = Scratch<float>((size_t)capacity * kWide);
+    // Padding avoids cache conflicts. CRUCIBLE_PF_PAD_H=0 keeps tight storage for A/B checks.
+    const char* pad_h = crucible::SwitchText("CRUCIBLE_PF_PAD_H");
+    pf_pad_h_ = prefill_rows_ > 0 && (!pad_h || std::string(pad_h) == "1");
+    H_ = Scratch<float>((size_t)TightStackRows(capacity, pf_pad_h_, kPackedRows) * kWide);
     x_ = Scratch<float>((size_t)capacity * kHidden);
     dots_ = Scratch<float>((size_t)capacity * (kRank + kStreams) * kStreams);
     ss_ = Scratch<float>(capacity * kStreams);
@@ -207,6 +210,8 @@ class Engine {
   }
   float DraftMargin() const { return draft_margin_; }
   int DraftVocabulary() const { return draft_dense_ ? draft_size_ : draft_head_.O; }
+  // Bytes of one row of the block draft head (EXL3 tiles plus the fp16 scale), as in the DraftHead line above.
+  size_t DraftTokenBytes() const { return (size_t)m_.head.I * m_.head.K / 8 + 2; }
 
   void Reset() { sequence_->Reset(); }
 
@@ -464,7 +469,17 @@ class Engine {
   // mtp_rows: committed rows of the MTP cache; stk and carry: the MTP pair buffers (optional).
   void DumpState(const std::string& dir, int mtp_rows = 0, const float* stk = nullptr, const float* carry = nullptr);
   void ResetProfile() { ptime_.clear(); }
+  // The final trunk stacks of the last decode, verify or small-row pass (at most kPackedRows rows). A bulk Prefill
+  // leaves its rows in the padded buffer: read them with CopyPrefillStacks.
   float* H() { return H_; }
+  // Copies the final trunk stacks of rows [first, first + rows) of the last Prefill call to dst (tight rows, null
+  // stream). Call it before any other device work, which may write that buffer.
+  void CopyPrefillStacks(float* dst, int first, int rows) const {
+    if (first < 0 || rows < 1 || first + rows > last_prefill_rows_) std::abort();
+    const int ldh = PrefillHStride(last_prefill_rows_);
+    HIP_OK(hipMemcpy2DAsync(dst, kWide * sizeof(float), PrefillH(last_prefill_rows_) + (size_t)first * ldh,
+                            ldh * sizeof(float), kWide * sizeof(float), rows, hipMemcpyDeviceToDevice, 0));
+  }
   void Truncate(size_t n) {
     const std::string state_error = sequence_->retained.Truncate(n);
     if (!state_error.empty()) {
@@ -1328,9 +1343,10 @@ class Engine {
   }
 
   template <int R>
-  void HcReadR(const Hc& hc, bool inject, int offset = 0) {
-    // offset selects one row block of a prefill chunk (the final HC).
-    float* h = H_ + (size_t)offset * kWide;
+  void HcReadR(const Hc& hc, bool inject, int offset = 0, float* rows = nullptr) {
+    // offset selects one row block of a prefill chunk (the final HC); rows, when set, holds that block's stacks
+    // (a bulk chunk's rows stay in pf_H_).
+    float* h = rows ? rows : H_ + (size_t)offset * kWide;
     float* dots = dots_ + (size_t)offset * hc.M * kStreams;
     float* ss = ss_ + offset * kStreams;
     float* x = x_ + (size_t)offset * kHidden;
@@ -1608,6 +1624,20 @@ class Engine {
     }
   }
 
+  // R rows of stride ldh as one tight device block: H itself, or a copy in the debug staging buffer.
+  const float* TightRows(const float* H, int ldh, int R) {
+    if (ldh == kWide) return H;
+    const size_t floats = (size_t)R * kWide;
+    if (dump_pack_floats_ < floats) {
+      if (dump_pack_) HIP_OK(hipFree(dump_pack_));
+      HIP_OK(hipMalloc(&dump_pack_, floats * sizeof(float)));
+      dump_pack_floats_ = floats;
+    }
+    HIP_OK(hipMemcpy2D(dump_pack_,kWide*sizeof(float),H,ldh*sizeof(float),
+                       kWide*sizeof(float),R,hipMemcpyDeviceToDevice));
+    return dump_pack_;
+  }
+
   void Dump(const std::string& dir, int idx, int R, const float* H = nullptr, int ldh = kWide) {
 #if CRUCIBLE_DEBUG_NONFINITE & 13
     DebugAfterLayer(idx, R, const_cast<float*>(H ? H : H_), ldh);
@@ -1619,18 +1649,7 @@ class Engine {
     // pages directly; with HSA_USE_SVM=0 (runtime_memory_policy.h) it faults.
     // Pack on the device first, then copy one contiguous block to the host.
     // Decode dumps every layer on every step, so the staging buffer persists.
-    const float* source = H;
-    if (ldh != kWide) {
-      if (dump_pack_floats_ < h.size()) {
-        if (dump_pack_) HIP_OK(hipFree(dump_pack_));
-        HIP_OK(hipMalloc(&dump_pack_, h.size() * sizeof(float)));
-        dump_pack_floats_ = h.size();
-      }
-      HIP_OK(hipMemcpy2D(dump_pack_,kWide*sizeof(float),H,ldh*sizeof(float),
-                         kWide*sizeof(float),R,hipMemcpyDeviceToDevice));
-      source = dump_pack_;
-    }
-    HIP_OK(hipMemcpy(h.data(), source, h.size() * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_OK(hipMemcpy(h.data(), TightRows(H, ldh, R), h.size() * sizeof(float), hipMemcpyDeviceToHost));
     char name[64];
     std::snprintf(name, sizeof(name), "/h_%02d.f32", idx);
     if (batch_streams_.empty()) AppendDump(dir + name, h.data(), h.size());
@@ -1746,6 +1765,8 @@ class Engine {
   // Keep public H() tight for decode, MTP, batching and retained-prefix readers.
   float* pf_H_ = nullptr;
   int pf_hstride_ = kWide;
+  bool pf_pad_h_ = false;      // pf_H_ exists (CRUCIBLE_PF_PAD_H), so H_ holds only kPackedRows rows
+  int last_prefill_rows_ = 0;  // rows of the last Prefill call, for CopyPrefillStacks
   float* PrefillH(int R) const { return R > kMaxRows && pf_H_ ? pf_H_ : H_; }
   int PrefillHStride(int R) const { return R > kMaxRows && pf_H_ ? pf_hstride_ : kWide; }
   __half* pf_plenv_ = nullptr;

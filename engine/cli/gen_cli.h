@@ -205,6 +205,9 @@ inline GenResult RunSampledGen(Engine& eng, const GenOptions& o, const std::vect
   return result;
 }
 
+// RunPrompt picks the bulk prefill path at compile time; an engine without it would fall back to Forward silently.
+static_assert(crucible::HasGemmPrefill<Engine>, "RunGen needs the GEMM prefill engine interface");
+
 // Temperature zero keeps the original engine calls and greedy verification.
 GenResult RunGen(Engine& eng, const GenOptions& o, const std::vector<int>& blocks) {
 #if CRUCIBLE_DEBUG_NONFINITE & 4

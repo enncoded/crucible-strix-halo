@@ -11,8 +11,10 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace crucible {
 enum class CacheRetention { Session, Shared };
@@ -78,8 +80,25 @@ inline bool BatchCacheConsumerCompatible(const ConversationResume& resume, size_
          ConversationPromptCompatible(resume, length, boundary, rows);
 }
 
+// Find's rule for a host frontier of `length` (saved with stable boundary `saved_boundary`) and a prompt of
+// `length_of_prompt` rows with boundary `boundary` and restore limit `warmup_start` (BatchRestoreLimit). A Frontier
+// point resumes only where Find would restore a host frontier of its length.
+inline bool SlotFrontierFits(size_t length, size_t saved_boundary, size_t length_of_prompt, size_t boundary,
+                             size_t warmup_start, int rows) {
+  const size_t stable = boundary ? boundary : length_of_prompt;
+  return length <= std::min(stable, warmup_start) &&
+         BatchCacheConsumerCompatible(BatchFrontierResume(length, saved_boundary), length_of_prompt, boundary,
+                                      warmup_start, rows);
+}
 // The default MemAvailable that a save keeps free (the server's --host-reserve-mib).
 inline constexpr uint64_t kDefaultHostReserve = uint64_t(8) << 30;
+// a save that shares host chunks of a held snapshot needs only `host_bytes` of new host memory (0: all its
+// bytes). It keeps the chunks `kept` (SnapshotBytes::ShareableOwners; the caller holds their snapshot until the save
+// ends), so an eviction of an entry that uses them does not free them.
+struct SharedSave {
+  size_t host_bytes = 0;
+  std::vector<const void*> kept;
+};
 template<class Snapshot>
 class BatchConversationCache {
   struct MemoryLease {
@@ -137,6 +156,20 @@ class BatchConversationCache {
     if (ids.size() < 2) return 0;
     return cache_.Longest(ids, policy, ids.size() - 1, [](const Entry& entry) { return !entry.snapshot->resume.prompt_only; });
   }
+  // The length and pending rows of the tail that FindTail would restore, without a change to the cache ({0, 0}: none).
+  std::pair<size_t, int> PeekTailState(std::span<const int> ids, const ConversationPolicy& policy) const {
+    std::pair<size_t, int> best{0, 0};
+    if (ids.size() < 2) return best;
+    cache_.ForEach(policy, [&](std::span<const int> key, const Entry& entry) {
+      if (!entry.snapshot->resume.prompt_only && key.size() < ids.size() && key.size() > best.first &&
+          std::equal(key.begin(), key.end(), ids.begin()))
+        best = {key.size(), entry.snapshot->resume.replay};
+    });
+    return best;
+  }
+  // with slot frontiers the host heads are the sessions without a slot. Protect no more of them than the
+  // budget holds (Plan), so a handover copy can still evict the oldest waiting one. Off: the live count as before.
+  void SetSlotFrontiers(bool on) { slot_frontiers_ = on; }
   // The newest tail saved after the restored entry is this conversation's last answer. A prompt that leaves it lost
   // replay by its own tokens: `common` is the first position where it differs. Compares one tail, from the restore on.
   std::optional<TailDivergence> MissedTail(std::span<const int> ids, const ConversationPolicy& policy,
@@ -167,7 +200,7 @@ class BatchConversationCache {
   template<class Create>
   bool CaptureTail(std::span<const int> hist, const ConversationPolicy& policy, size_t bytes, uint64_t available,
                    Create create, bool trusted = false, bool guarded = false, bool resident = false,
-                   std::span<const int> tokens = {}) {
+                   std::span<const int> tokens = {}, SharedSave share = {}) {
     if (tokens.empty()) tokens = hist;
     if (tokens.size() != hist.size()) throw std::invalid_argument("tail key and tokens differ in length");
     Try(hist.size());
@@ -178,7 +211,7 @@ class BatchConversationCache {
     const auto marked = trusted ? Supersede(hist, policy, [](const Entry& entry) {
       return entry.retention == CacheRetention::Session;
     }) : std::set<const Item*>{};
-    if (!Admit(bytes, available, resident, !trusted)) return Unmark(marked, refusal_);
+    if (!Admit(bytes, available, resident, !trusted, share)) return Unmark(marked, refusal_);
     try {
       auto lease = std::make_shared<MemoryLease>(ledger_, bytes);
       auto snapshot = create();
@@ -195,10 +228,12 @@ class BatchConversationCache {
       return Unmark(marked, "memory");
     }
   }
-  // `ids` is the cache key; `tokens` as in CaptureTail.
+  // `ids` is the cache key; `tokens` as in CaptureTail. `proven`: the state extended a proven state when the slot
+  // took it (the entry that it extended may be gone by now).
   template<class Create>
   bool Capture(std::span<const int> ids, const ConversationPolicy& policy, const CacheFrontier& frontier,
-               size_t bytes, uint64_t available, Create create, std::span<const int> tokens = {}) {
+               size_t bytes, uint64_t available, Create create, std::span<const int> tokens = {},
+               SharedSave share = {}, bool proven_before = false) {
     if (tokens.empty()) tokens = ids;
     if (tokens.size() != ids.size()) throw std::invalid_argument("prompt key and tokens differ in length");
     Try(frontier.position);
@@ -216,8 +251,8 @@ class BatchConversationCache {
           return entry.retention == CacheRetention::Session && entry.snapshot->resume.prompt_only;
         });
     // Before Admit: the state that this frontier extends is superseded now, so Admit evicts it first.
-    const bool proven = ExtendsProven(ids.first(frontier.position), policy);
-    if (!Admit(bytes, available, false, frontier.speculative)) return Unmark(marked, refusal_);
+    const bool proven = proven_before || ExtendsProven(ids.first(frontier.position), policy);
+    if (!Admit(bytes, available, false, frontier.speculative, share)) return Unmark(marked, refusal_);
     try {
       auto lease = std::make_shared<MemoryLease>(ledger_, bytes);
       auto snapshot = create();
@@ -237,6 +272,17 @@ class BatchConversationCache {
       return Unmark(marked, "memory");
     }
   }
+  // a slot keeps the session frontier `ids` instead of a host copy. The older Session frontiers that it
+  // extends are superseded as a Capture of it would mark them (they leave first and never spill); a speculative
+  // frontier marks nothing, as in Capture.
+  void KeepInSlot(std::span<const int> ids, const ConversationPolicy& policy, bool speculative) {
+    if (!speculative)
+      Supersede(ids, policy, [](const Entry& entry) {
+        return entry.retention == CacheRetention::Session && entry.snapshot->resume.prompt_only;
+      });
+  }
+  // Whether `ids` extends a proven state: the slot asks when it keeps a frontier, for its host copy later.
+  bool ProvenBelow(std::span<const int> ids, const ConversationPolicy& policy) { return ExtendsProven(ids, policy); }
   // A slot resume copies nothing from the host, so it marks the session's newest host entry that the prompt extends
   // as used: that session stays live.
   void Touch(std::span<const int> ids, const ConversationPolicy& policy) {
@@ -287,9 +333,9 @@ class BatchConversationCache {
                                    const std::shared_ptr<const Entry>&, int tier, uint64_t room)>;
   void SetSpill(Spill spill) {
     spill_ = std::move(spill);
-    cache_.SetEvicted([victims = victims_](const Item& item, int tier) {
+    cache_.SetEvicted([victims = victims_, kept = kept_](const Item& item, int tier) {
       if (tier >= kStale && tier <= kWaiting)
-        victims->push_back({item.ids, item.policy, item.snapshot, tier, item.bytes});
+        victims->push_back({item.ids, item.policy, item.snapshot, tier, Freed(item, *kept)});
     });
   }
   // Every entry with its key and superseded mark, the most recently used first (a stopping engine writes them to
@@ -424,12 +470,17 @@ class BatchConversationCache {
       if (std::none_of(confirmed.begin(), confirmed.end(), [&](const Item* other) { return Extends(*other, *item); }))
         heads.push_back(item);
     std::stable_sort(heads.begin(), heads.end(), [](const Item* a, const Item* b) { return a->used > b->used; });
+    // an earlier change R3 (SetSlotFrontiers).
+    size_t largest = 0;
+    for (const Item* head : heads) largest = std::max(largest, head->bytes);
+    const size_t protect = !slot_frontiers_ ? live_ :
+        std::min(live_, std::max<size_t>(1, largest ? cache_.Budget() / largest : live_));
     std::map<const Item*, bool> live;
     std::set<const Item*> idle, stale;
     for (size_t i = 0; i < heads.size(); ++i) {
       if (now - heads[i]->active_at > idle_seconds_) stale.insert(heads[i]);
       if (clock_ - heads[i]->active > kIdleRounds * live_ || stale.contains(heads[i])) idle.insert(heads[i]);
-      live[heads[i]] = i < live_ && !idle.contains(heads[i]);
+      live[heads[i]] = i < protect && !idle.contains(heads[i]);
     }
     // Each other entry belongs to the longest resume point that it extends (none for shared prefixes).
     std::map<const Item*, const Item*> owner;
@@ -461,7 +512,7 @@ class BatchConversationCache {
   // memory when `victims` ends.
   void SpillVictims(uint64_t available, size_t bytes) {
     uint64_t have = available;
-    for (const auto& victim : *victims_) have = victim.bytes > UINT64_MAX - have ? UINT64_MAX : have + victim.bytes;
+    for (const auto& victim : *victims_) have = victim.freed > UINT64_MAX - have ? UINT64_MAX : have + victim.freed;
     const uint64_t need = host_reserve_ + bytes;
     HandVictims(have > need ? have - need : 0);
   }
@@ -471,26 +522,32 @@ class BatchConversationCache {
     victims_->clear();
     for (const auto& victim : victims)
       if (spill_(victim.key, victim.policy, victim.entry, victim.tier, room))
-        room -= std::min<uint64_t>(room, victim.bytes);
+        room -= std::min<uint64_t>(room, victim.freed);
   }
   // Budget room and the host reserve (default 8 GiB of MemAvailable) together (ConversationCache ReserveHost): evicted snapshots count
   // toward the reserve, and a save that cannot fit evicts nothing. A save that only live resume points could make
   // room for is refused as "protected". A copy of a slot's state takes only superseded entries ("resident"). A
   // speculative tail never takes a waiting session's resume point: with more sessions than slots, that state is the
   // next turn of a session that has no slot (tests/slot_copy_soak_test.cpp).
-  bool Admit(size_t bytes, uint64_t available, bool resident = false, bool speculative = false) {
+  bool Admit(size_t bytes, uint64_t available, bool resident = false, bool speculative = false,
+             const SharedSave& share = {}) {
     const uint64_t reserve = host_reserve_;
+    const size_t host_bytes = share.host_bytes && share.host_bytes < bytes ? share.host_bytes : bytes;
+    // The eviction hook records what each victim frees with the chunks that this save keeps.
+    *kept_ = share.kept;
+    const struct Reset { std::vector<const void*>& kept; ~Reset() { kept.clear(); } } reset{*kept_};
+    const auto freed = [&](const Item& item) { return Freed(item, share.kept); };
     // No eviction needed: skip the plan.
-    if (cache_.ReserveHost(bytes, available, reserve, [](const Item&) { return -1; })) return true;
+    if (cache_.ReserveHost(bytes, host_bytes, available, reserve, [](const Item&) { return -1; }, freed)) return true;
     const auto plan = Plan();
-    if (cache_.ReserveHost(bytes, available, reserve, [&](const Item& item) {
+    if (cache_.ReserveHost(bytes, host_bytes, available, reserve, [&](const Item& item) {
           const int tier = plan.at(&item);
           // A speculative save never takes a client prompt's state that waits for its session's next turn.
           if ((resident && tier > kSuperseded) || (speculative && (tier == kWaiting || tier == kProbation)))
             return int(kKept);
           return tier;
-        })) {
-      SpillVictims(available, bytes);
+        }, freed)) {
+      SpillVictims(available, host_bytes);
       return true;
     }
     if (resident) {
@@ -498,12 +555,24 @@ class BatchConversationCache {
       return false;
     }
     // An empty cache would hold it: only live resume points stand in the way.
-    refusal_ = available + cache_.Bytes() >= reserve + bytes ? "protected" : "host";
+    refusal_ = available + cache_.Bytes() >= reserve + host_bytes ? "protected" : "host";
     return false;
+  }
+  // The host memory that an eviction frees: the entry less its chunks that another snapshot also uses or that the
+  // save keeps. Two victims that share a chunk each count it as held: the count stays on the safe side.
+  static size_t Freed(const Item& item, std::span<const void* const> kept) {
+    if constexpr (requires(const Snapshot& snapshot) { snapshot.bytes.OwnBytes(kept); }) {
+      const auto& bytes = item.snapshot->snapshot->bytes;
+      const size_t held = bytes.size() - bytes.OwnBytes(kept);
+      return item.bytes > held ? item.bytes - held : 0;
+    } else {
+      return item.bytes;
+    }
   }
   std::shared_ptr<SnapshotMemoryLedger> ledger_;
   PrefixCache<Entry, ConversationPolicy> cache_;
   const size_t live_;
+  bool slot_frontiers_ = false;
   const uint64_t host_reserve_;
   const bool probation_;
   const double idle_seconds_;
@@ -520,10 +589,12 @@ class BatchConversationCache {
     ConversationPolicy policy;
     std::shared_ptr<const Entry> entry;
     int tier;
-    size_t bytes;
+    size_t freed;  // the host memory that the eviction frees (Freed, with the chunks that the save keeps)
   };
   Spill spill_;
   // Evicted in the current Admit, waiting for SpillVictims (shared with the eviction hook, so no `this` capture).
   std::shared_ptr<std::vector<Victim>> victims_ = std::make_shared<std::vector<Victim>>();
+  // The chunks that the save of the current Admit keeps (for the eviction hook; empty outside Admit).
+  std::shared_ptr<std::vector<const void*>> kept_ = std::make_shared<std::vector<const void*>>();
 };
 }  // namespace crucible

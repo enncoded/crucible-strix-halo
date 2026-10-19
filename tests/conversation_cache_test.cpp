@@ -21,6 +21,25 @@ static void HostReserve() {
   assert(cache.ReserveHost(50, 1000 + 20, 1000) && cache.Bytes() <= 30);  // 30 short: one entry leaves
 }
 
+// a save that shares host chunks needs only its new bytes of host memory, and an eviction frees only the
+// bytes that no other snapshot uses (`freed`). The budget still counts whole entries.
+static void SharedHostRoom() {
+  const std::vector<int> a{1}, b{2}, c{3};
+  const auto tier = [](const PrefixCache<Snapshot>::Entry&) { return 1; };
+  // Here `value` is the shared part of each entry.
+  const auto freed = [](const PrefixCache<Snapshot>::Entry& entry) { return entry.bytes - size_t(entry.snapshot->value); };
+  PrefixCache<Snapshot> cache(100);
+  assert(cache.Insert(a, 0, 30, Make(25)) && cache.Insert(b, 0, 30, Make(0)));
+  // 8 bytes of new memory fit in 10 free bytes: no eviction, although the whole entry (30) does not.
+  assert(cache.ReserveHost(30, 8, 1000 + 10, 1000, tier, freed) && cache.Bytes() == 60);
+  // 20 short: a (LRU) frees only 5, so b leaves too.
+  assert(cache.ReserveHost(30, 30, 1000 + 10, 1000, tier, freed) && cache.Bytes() == 0);
+  // The budget counts whole entries: 3 x 30 in 100 leaves no room for a fourth, whatever the host has.
+  assert(cache.Insert(a, 0, 30, Make(30)) && cache.Insert(b, 0, 30, Make(30)) && cache.Insert(c, 0, 30, Make(30)));
+  assert(!cache.ReserveHost(30, 1, 1u << 30, 0, [](const PrefixCache<Snapshot>::Entry&) { return -1; }, freed));
+  assert(cache.ReserveHost(30, 1, 1u << 30, 0, tier, freed) && cache.Bytes() == 60);
+}
+
 // Superseded entries leave first; everything else keeps LRU order.
 static void SupersededEvictionOrder() {
   const auto all = [](const Snapshot&) { return true; };
@@ -80,6 +99,7 @@ static void SupersededEvictionOrder() {
 }
 
 int main() {
+  SharedHostRoom();
   HostReserve();
   const auto small = ConversationAdmission::ForPrompt(4088, 4081, 4096, 256);
   assert(small.frontier == 0 && !small.Allows(4081) && !small.Allows(4088));

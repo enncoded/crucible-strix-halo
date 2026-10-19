@@ -601,7 +601,129 @@ static void SlotOnlySession() {
   assert(c.HitTail(Tokens(1, 33)) == 30);
 }
 
+// a save that shares host chunks with its base needs only its new bytes of host memory. (The chunks that the
+// save keeps and the real freed bytes of victims: tests/tail_incr_test.cpp SpillRoomWithSharedChunks.)
+static void SharedSaveRoom() {
+  const auto ids = Tokens(1, 40);
+  ConversationPolicy policy;
+  policy.prefill_rows = 8;
+  const uint64_t reserve = uint64_t(8) << 30;
+  const auto make = [&](size_t length) {
+    auto s = std::make_shared<Snapshot>(); s->hist.assign(ids.begin(), ids.begin() + long(length));
+    s->resume.length = length; return std::shared_ptr<const Snapshot>(s);
+  };
+  const auto run = [&](uint64_t available, size_t host_bytes) {
+    BatchConversationCache<Snapshot> cache(1000, {}, 8, reserve, false);
+    assert(cache.CaptureTail(std::span<const int>(ids.data(), 30), policy, 200, reserve + 300, [&] { return make(30); }, true));
+    const bool saved = cache.CaptureTail(std::span<const int>(ids.data(), 35), policy, 200, available,
+                                         [&] { return make(35); }, true, false, false, {}, SharedSave{host_bytes, {}});
+    return std::pair{saved, cache.Bytes()};
+  };
+  // 40 new bytes fit in 50 free bytes: the older tail stays, although the whole save (200) does not fit.
+  assert(run(reserve + 50, 40) == std::pair(true, size_t(400)));
+  assert(run(reserve + 50, 0) == std::pair(true, size_t(200)));
+  // 30 short: the older tail leaves.
+  assert(run(reserve + 10, 40) == std::pair(true, size_t(200)));
+}
+
+// a slot keeps a session frontier. The older Session frontiers that it extends
+// are superseded with no bytes; the host copy later keeps its proven flag; and the live sessions without a slot
+// are protected only as far as the budget holds them, so a handover copy can still evict the oldest one.
+static void SlotFrontiers() {
+  const auto S = CacheRetention::Session;
+  const auto x = Tokens(1, 40), y = Tokens(101, 40);
+  ConversationPolicy policy;
+  policy.prefill_rows = 8;
+  {
+    Cache c;
+    assert(c.Capture(x, 8, S) && c.Hit(x) == 8 && c.cache.ProvenBelow(std::span<const int>(x.data(), 16), c.policy));
+    assert(!c.cache.ProvenBelow(std::span<const int>(y.data(), 16), c.policy));
+    // Three live heads fill the budget. A speculative point marks nothing (a fourth state finds no room); a confirmed
+    // one supersedes frontier 8, which leaves first.
+    assert(c.Capture(y, 8, S) && c.Capture(Tokens(201, 40), 8, S));
+    c.cache.KeepInSlot(std::span<const int>(x.data(), 16), c.policy, true);
+    assert(!c.Capture(Tokens(301, 40), 8, S) && c.cache.SupersededEvictions() == 0);
+    c.cache.KeepInSlot(std::span<const int>(x.data(), 16), c.policy, false);
+    assert(c.Capture(Tokens(301, 40), 8, S) && c.cache.SupersededEvictions() == 1 && c.Hit(x) == 0);
+  }
+  // The host copy of a slot frontier keeps the proven flag that the slot recorded (the entry that it extended can
+  // be gone); with probation on it is then no one-time state.
+  {
+    Cache c(8, 3, true);
+    const auto make = [&](size_t length) {
+      auto s = std::make_shared<Snapshot>(); s->hist.assign(x.begin(), x.begin() + long(length));
+      s->resume.length = length; s->resume.prompt_only = true; s->resume.prompt_boundary = 39;
+      return std::shared_ptr<const Snapshot>(s);
+    };
+    assert(c.cache.Capture(x, c.policy, {16, S}, 64, size_t(9) << 30, [&] { return make(16); }, {}, {}, true));
+    assert(c.cache.Proven(std::span<const int>(x.data(), 16), c.policy));
+    assert(c.cache.Capture(y, c.policy, {16, S}, 64, size_t(9) << 30, [&] {
+      auto s = std::make_shared<Snapshot>(*make(16)); s->hist.assign(y.begin(), y.begin() + 16);
+      return std::shared_ptr<const Snapshot>(s); }));
+    assert(!c.cache.Proven(std::span<const int>(y.data(), 16), c.policy));
+  }
+  // Three heads of 64, 32 and 128 bytes in a 256-byte budget: two of the largest fit, so with slot frontiers two are
+  // live (the newest) and the oldest waits. A new state of 96 bytes evicts it. Without slot frontiers all three stay
+  // protected, as before: the save is refused.
+  for (const bool on : {true, false}) {
+    BatchConversationCache<Snapshot> cache(256, {}, 8, kDefaultHostReserve, false);
+    cache.SetSlotFrontiers(on);
+    const auto save = [&](const std::vector<int>& ids, size_t bytes) {
+      return cache.Capture(ids, policy, {16, S}, bytes, size_t(9) << 30, [&] {
+        auto s = std::make_shared<Snapshot>(); s->hist.assign(ids.begin(), ids.begin() + 16);
+        s->resume.length = 16; s->resume.prompt_only = true; s->resume.prompt_boundary = 39;
+        return std::shared_ptr<const Snapshot>(s);
+      });
+    };
+    assert(save(x, 64) && save(y, 32) && save(Tokens(201, 40), 128) && cache.Bytes() == 224);
+    if (!on) {
+      assert(!save(Tokens(301, 40), 96) && cache.Evictions() == 0 && cache.Status().last.refused == "protected");
+      continue;
+    }
+    assert(save(Tokens(301, 40), 96) && cache.Bytes() == 256 && cache.Evictions() == 1);
+    assert(!cache.Find(x, policy, 39, 40, 8) && cache.Find(y, policy, 39, 40, 8));
+  }
+  // SlotFrontierFits is Find's rule. A host frontier of each length, saved with its own stable
+  // boundary, restores for a prompt exactly when the rule accepts a Frontier point of that length.
+  const auto z = Tokens(1, 64);
+  size_t accepted = 0, refused = 0;
+  for (size_t length = 8; length <= 56; length += 4)
+    for (const size_t saved_boundary : {size_t(0), size_t(20), size_t(40)})
+      for (const size_t prompt : {size_t(41), size_t(57), size_t(64)})
+        for (const size_t boundary : {size_t(0), size_t(16), size_t(32), size_t(48)})
+          for (const size_t warmup : {size_t(24), prompt - 1}) {
+            if (length > prompt) continue;
+            BatchConversationCache<Snapshot> cache(1 << 20, {}, 8, kDefaultHostReserve, false);
+            const bool saved = cache.Capture(z, policy, {length, S, length > saved_boundary && saved_boundary}, 64,
+                                             size_t(9) << 30, [&] {
+              auto s = std::make_shared<Snapshot>(); s->hist.assign(z.begin(), z.begin() + long(length));
+              s->resume = BatchFrontierResume(length, saved_boundary);
+              return std::shared_ptr<const Snapshot>(s);
+            });
+            if (!saved) continue;
+            const std::span<const int> ids(z.data(), prompt);
+            const bool found = cache.PeekFind(ids, policy, boundary, warmup, 8) == length;
+            assert(found == SlotFrontierFits(length, saved_boundary, prompt, boundary, warmup, 8));
+            ++(found ? accepted : refused);
+          }
+  assert(accepted > 20 && refused > 20);
+  // ResumeHost reads PeekTailState: the length and pending rows that FindTail restores, with no change to the cache.
+  {
+    Cache c;
+    assert(c.cache.PeekTailState(x, c.policy) == std::pair(size_t(0), 0));
+    assert(c.cache.CaptureTail(std::span<const int>(x.data(), 30), c.policy, 64, size_t(9) << 30, [&] {
+      auto s = std::make_shared<Snapshot>(); s->hist.assign(x.begin(), x.begin() + 30);
+      s->resume.length = 30; s->resume.replay = 3; return std::shared_ptr<const Snapshot>(s); }));
+    assert(c.Tail(x, 20) && c.cache.PeekTailState(x, c.policy) == std::pair(size_t(30), 3));
+    const auto found = c.cache.FindTail(x, c.policy);
+    assert(found && found->snapshot->hist.size() == 30 && found->snapshot->resume.replay == 3);
+    assert(c.cache.PeekTailState(std::span<const int>(x.data(), 30), c.policy) == std::pair(size_t(20), 0));
+  }
+}
+
 int main() {
+  SlotFrontiers();
+  SharedSaveRoom();
   SlotOnlySession();
   StaleSession();
   Probation();

@@ -14,27 +14,40 @@ class PrefillHDefaultTest(unittest.TestCase):
     def setUpClass(cls):
         cls.directory = tempfile.TemporaryDirectory()
         root = Path(cls.directory.name)
-        source = (ROOT / "engine/runtime/prefill_engine.inc").read_text()
-        start = source.index('  const char* pad_h=crucible::SwitchText("CRUCIBLE_PF_PAD_H");')
-        end = source.index("  // Fragment-order copies", start)
-        # Compile the exact production block, so a copied policy cannot hide a regression.
-        program = f'#include "{ROOT / "engine/switches.h"}"\n' + """
+        # The pad decision and the H_ size are in the Engine constructor; InitPrefill sizes pf_H_.
+        engine = (ROOT / "engine/engine.hip").read_text()
+        start = engine.index('    const char* pad_h = crucible::SwitchText("CRUCIBLE_PF_PAD_H");')
+        end = engine.index("    x_ = Scratch<float>", start)
+        prefill = (ROOT / "engine/runtime/prefill_engine.inc").read_text()
+        pf_start = prefill.index("  if (pf_pad_h_) {")
+        pf_end = prefill.index("  // Fragment-order copies", pf_start)
+        # Compile the exact production blocks, so a copied policy cannot hide a regression.
+        program = (f'#include "{ROOT / "engine/switches.h"}"\n#include "{ROOT / "engine/runtime/prefill_rows.h"}"\n'
+                   + """
+#include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <string>
 #include <cstddef>
-constexpr int kWide=10240;
-size_t cells=0;
+constexpr int kWide=10240, kPackedRows=16;
+size_t cells[2]={0,0};
+int calls=0, scratch_calls=0, zeros_calls=0;
 float storage=0;
-template<class T> T* Zeros(size_t count) { cells=count; return &storage; }
-template<class T> T* Scratch(size_t count) { return Zeros<T>(count); }
-int main() {
-  int prefill_rows_=4096, pf_launch_rows_=4096, pf_hstride_=kWide;
+template<class T> T* Allocate(size_t count) { cells[calls++]=count; return &storage; }
+// Counted apart: an earlier change poisons Scratch<> with 0xFF, so H_ and pf_H_ must stay Scratch, not Zeros.
+template<class T> T* Zeros(size_t count) { ++zeros_calls; return Allocate<T>(count); }
+template<class T> T* Scratch(size_t count) { ++scratch_calls; return Allocate<T>(count); }
+int main(int, char** argv) {
+  int prefill_rows_=4096, pf_launch_rows_=std::atoi(argv[1]), pf_hstride_=kWide;
+  const int capacity = std::max(kPackedRows, pf_launch_rows_);
+  bool pf_pad_h_=false;
+  float* H_=nullptr;
   float* pf_H_=nullptr;
-""" + source[start:end] + """
-  std::printf("%d %zu %d\\n",pf_hstride_,cells,pf_H_!=nullptr);
+""" + engine[start:end] + prefill[pf_start:pf_end] + """
+  std::printf("%d %zu %zu %d %d %d\\n",pf_hstride_,cells[0],cells[1],pf_H_!=nullptr && H_!=nullptr,scratch_calls,
+              zeros_calls);
 }
-"""
+""")
         (root / "policy.cpp").write_text(program)
         cls.binary = root / "policy"
         subprocess.run([*shlex.split(os.environ.get("CXX", "g++")), "-std=c++20",
@@ -45,27 +58,33 @@ int main() {
     def tearDownClass(cls):
         cls.directory.cleanup()
 
-    def check_policy(self, value, expected):
+    def check_policy(self, value, expected, launch_rows=4096):
         environment = {key: item for key, item in os.environ.items() if key != "CRUCIBLE_PF_PAD_H"}
         if value is not None:
             environment["CRUCIBLE_PF_PAD_H"] = value
-        result = subprocess.run([str(self.binary)], env=environment, check=True,
+        result = subprocess.run([str(self.binary), str(launch_rows)], env=environment, check=True,
                                 capture_output=True, text=True)
-        self.assertEqual(tuple(map(int, result.stdout.split())), expected)
+        # The last two numbers: Scratch<> calls (H_, and pf_H_ when padded) and Zeros<> calls (none).
+        scratch = 2 if expected[3] else 1
+        self.assertEqual(tuple(map(int, result.stdout.split())), (*expected, scratch, 0))
 
+    # (pf_hstride_, H_ cells, pf_H_ cells, pf_H_ exists). With pf_H_, H_ holds kPackedRows rows.
     def test_unset_pads(self):
-        self.check_policy(None, (10304, 4096 * 10304, 1))
+        self.check_policy(None, (10304, 16 * 10240, 4096 * 10304, 1))
 
     def test_one_pads(self):
-        self.check_policy("1", (10304, 4096 * 10304, 1))
+        self.check_policy("1", (10304, 16 * 10240, 4096 * 10304, 1))
+
+    def test_8192_row_launches_keep_h_at_one_packed_pass(self):
+        self.check_policy(None, (10304, 16 * 10240, 8192 * 10304, 1), launch_rows=8192)
 
     def test_zero_restores_tight(self):
-        self.check_policy("0", (10240, 0, 0))
+        self.check_policy("0", (10240, 4096 * 10240, 0, 0))
 
     def test_other_values_keep_legacy_policy(self):
         for value in ("", "false", "01"):
             with self.subTest(value=value):
-                self.check_policy(value, (10240, 0, 0))
+                self.check_policy(value, (10240, 4096 * 10240, 0, 0))
 
 
 if __name__ == "__main__":

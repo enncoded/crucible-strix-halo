@@ -208,6 +208,29 @@ void RoundTripAndRebuild() {
   assert(logs.Has("state_disk start entries=1"));
 }
 
+// a composed snapshot (shared chunks of a held one, its own bytes packed) spills the same bytes as a flat one,
+// and the read gives a flat snapshot with those bytes.
+void ComposedSnapshotSpills() {
+  Logs logs;
+  const auto base = Make(Tokens(40), 3 * kChunk + 12345, 4);
+  std::vector<uint8_t> device = base->bytes.Copy();
+  device.back() ^= 0x5a;  // a byte past the shared chunks changes, as a later row of the slot would
+  auto composed = std::make_shared<TestSnapshot>(*base);
+  std::vector<SnapshotRange> copies;
+  composed->bytes = SnapshotBytes::Compose({{device.data(), 100}, {device.data() + 100, device.size() - 100,
+                                                                   &base->bytes, 100}}, copies);
+  CopySnapshotRanges(copies, composed->bytes, true);
+  assert(composed->bytes.HeldElsewhere() == 2 * kChunk && composed->bytes.Copy() == device);
+  Disk disk(Options("composed", logs));
+  Spill(disk, composed);
+  assert(disk.Drain(30));
+  const auto meta = disk.Best(Tokens(50), Policy(), false, Any);
+  assert(meta && StageWait(disk, *meta).state == StageState::Ready);
+  const auto ready = disk.Ready(Tokens(50), Policy(), false, Any);
+  assert(ready.snapshot && ready.snapshot->bytes.Flat() && ready.snapshot->bytes.Copy() == device);
+  disk.Consume(ready);
+}
+
 void KeyMatchesExactly() {
   Logs logs;
   Disk disk(Options("b", logs));
@@ -261,6 +284,38 @@ void IdentitiesAndLocks() {
   bool threw = false;
   try { Disk bad(outside); } catch (const std::invalid_argument&) { threw = true; }
   assert(threw);
+}
+
+// A rollback from the block storage format: this binary removes the newer
+// binary's directory with its block files, and a stray block file in its own directory leaves at start.
+void OldBinaryRemovesBlocks() {
+  Logs logs;
+  const fs::path root = Root() / ".cache" / "rollback";
+  const fs::path newer = root / DirName('i');
+  const std::string digest(64, 'a');
+  fs::create_directories(newer);
+  for (const std::string name : {digest + ".block", digest + ".block.tmp.77", digest + ".block.dead.3",
+                                 digest + ".state"})
+    std::ofstream(newer / name) << "v2";
+  {
+    Disk disk(Options("h", logs, "rollback"));
+    assert(disk.Enabled());
+    assert(!fs::exists(newer));  // without the block names, the directory and its blocks stay
+    Spill(disk, Make(Tokens(10), 3000, 4));
+    assert(disk.Drain(30));
+    std::ofstream(disk.Directory() / (digest + ".block")) << "stray";
+    std::ofstream(disk.Directory() / (digest + ".block.tmp.9")) << "stray";
+  }
+  Disk again(Options("h", logs, "rollback"));
+  assert(again.Enabled() && again.Entries() == 1);
+  assert(!fs::exists(again.Directory() / (digest + ".block")));
+  assert(!fs::exists(again.Directory() / (digest + ".block.tmp.9")));
+  // Other names stay: a block name is a suffix, not a substring of any name.
+  const fs::path other = root / DirName('j');
+  fs::create_directories(other);
+  std::ofstream(other / "notes.blocks") << "keep";
+  Disk third(Options("k", logs, "rollback"));
+  assert(fs::exists(other / "notes.blocks"));
 }
 
 void CorruptFilesFail() {
@@ -875,8 +930,10 @@ int main() {
   PaddingIsZeroWithReusedBuffer();
   StoredSumsAndBytesMatchReference();
   RoundTripAndRebuild();
+  ComposedSnapshotSpills();
   KeyMatchesExactly();
   IdentitiesAndLocks();
+  OldBinaryRemovesBlocks();
   CorruptFilesFail();
   DamagedHeaderLeaves();
   BudgetAndFullDisk();

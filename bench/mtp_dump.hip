@@ -100,8 +100,9 @@ int main(int argc, char** argv) {
       const int R = std::min(step, n - i);
       if (eng.PrefillRows() > 0) eng.Prefill(ids.data() + i, R, "", false);
       else eng.Forward(ids.data() + i, R, 0, R);
-      HIP_OK(hipMemcpy(dstk + (size_t)i * kWide, eng.H(), (size_t)R * kWide * sizeof(float),
-                       hipMemcpyDeviceToDevice));
+      if (eng.PrefillRows() > 0) eng.CopyPrefillStacks(dstk + (size_t)i * kWide, 0, R);
+      else HIP_OK(hipMemcpy(dstk + (size_t)i * kWide, eng.H(), (size_t)R * kWide * sizeof(float),
+                            hipMemcpyDeviceToDevice));
     }
     HIP_OK(hipDeviceSynchronize());
     prefill_s += Now() - t0;

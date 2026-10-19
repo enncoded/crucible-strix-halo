@@ -103,6 +103,17 @@ class Service:
             # The reply is already complete: a capture fault never fails a request. The text names only the type.
             print(f"draft capture: turn not recorded ({type(error).__name__})", file=sys.stderr, flush=True)
 
+    def capture_draft(self, request, turns):
+        """Give the per-token draft counters of a finished turn to the day file, if --draft-stats is on."""
+        if self.capture is None or getattr(self.capture, "stats", None) is None:
+            return
+        try:
+            events = [turn["draft_event"] for turn in turns if isinstance(turn, dict) and "draft_event" in turn]
+            if events:
+                self.capture.record_draft(tools=bool(request.tools), thinking=bool(request.enable_thinking), events=events)
+        except Exception as error:  # noqa: BLE001 (a counter fault never reaches the handler)
+            print(f"draft stats: turn not recorded ({type(error).__name__})", file=sys.stderr, flush=True)
+
     def admit_client(self, address):
         """Count one open request for this address, or raise 429 when it has its limit."""
         if not self.max_requests_per_client:
@@ -466,13 +477,13 @@ def handler_for(service):
                 if output.stop_filter.stopped:
                     # The resident worker drains canceled jobs before its next request.
                     self.log_turn(cap, prompt_ids, output, dict(finish_reason="stop"))
-                    output.finish(dict(finish_reason="stop"))
+                    output.finish(self.opened_count(dict(finish_reason="stop"), prompt_ids))
                     return
                 if cap and output.think.thinking and len(output.ids) == cap.tokens:
                     job_prompt = self.close_thinking(request, prompt_ids, output, cap, options)
                     if job_prompt is None:
                         self.log_turn(cap, prompt_ids, output, dict(finish_reason="length"))
-                        output.finish(dict(finish_reason="length"))
+                        output.finish(self.opened_count(dict(finish_reason="length"), prompt_ids))
                         return
                     job, first_id = self.jobs[-1], len(output.ids)
                 # A continuation job prefills the reasoning again before its first event.
@@ -480,13 +491,19 @@ def handler_for(service):
             self.log_turn(cap, prompt_ids, output, event)
             if first_id:
                 # The continuation restores the snapshot that the first job wrote, so its count says nothing about
-                # the client's prompt. The first job is cancelled before its done event; the batch engine names its
-                # restore in the opened event. Without that count the reply omits it.
-                event = {key: value for key, value in event.items() if key != "cached_tokens"}
-                opened = (getattr(self.jobs[0], "turn", None) or {}).get("opened_cached")
-                if type(opened) is int and 0 <= opened < len(prompt_ids):
-                    event["cached_tokens"] = opened
+                # the client's prompt.
+                event = self.opened_count(event, prompt_ids)
             output.finish(event)
+
+        def opened_count(self, event, prompt_ids):
+            """event with the first job's restore as cached_tokens, for a reply with no done event of that job (a
+            continuation, no room after the cap, a stop string). The batch engine names the restore in the opened
+            event. Without that count the reply omits it."""
+            event = {key: value for key, value in event.items() if key != "cached_tokens"}
+            opened = (getattr(self.jobs[0], "turn", None) or {}).get("opened_cached")
+            if type(opened) is int and 0 <= opened < len(prompt_ids):
+                event["cached_tokens"] = opened
+            return event
 
         def log_turn(self, cap, prompt_ids, output, event):
             """One crucible_turn line for a request with a think cap, with the counts that the client sees.
@@ -651,4 +668,5 @@ def handler_for(service):
                 # The draft capture runs last, after the job cancel and the client release.
                 if finished:
                     service.capture_turn(request, prompt_ids, self.output.ids)
+                    service.capture_draft(request, [getattr(job, "turn", None) for job in self.jobs])
     return Handler

@@ -89,6 +89,30 @@ class HttpTests(unittest.TestCase):
         self.handle(self.chat())
         self.assertEqual(faulted, getattr(self.instance, "close_connection", False))
 
+    def test_draft_stats_get_the_done_events_of_the_turn_and_a_fault_keeps_the_reply(self):
+        # serve --draft-stats: the class and the done events that carry draft_event, nothing else.
+        seen = []
+        capture = SimpleNamespace(record=lambda **kwargs: None, stats=object(),
+                                  record_draft=lambda **kwargs: seen.append(kwargs))
+        original = FakeBackend.submit
+        def submit(backend, ids, request):
+            job = original(backend, ids, request)
+            job.turn = dict(draft_event=dict(event="done", draft_tally=[]))
+            return job
+        FakeBackend.submit = submit
+        try:
+            status, _, _, _ = self.handle(self.chat(), capture=capture)
+            self.assertEqual(status, 200)
+            self.assertEqual(seen, [dict(tools=False, thinking=False, events=[dict(event="done", draft_tally=[])])])
+            def broken(**kwargs):
+                raise KeyError("secret")
+            capture.record_draft = broken
+            status, _, raw, _ = self.handle(self.chat(), capture=capture)
+        finally:
+            FakeBackend.submit = original
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["choices"][0]["message"]["content"], "hello")
+
     def test_nonstream_chat_usage_and_ids(self):
         status, headers, raw, backend = self.handle(self.chat(return_token_ids=True, seed=18446744073709551615))
         response = json.loads(raw)

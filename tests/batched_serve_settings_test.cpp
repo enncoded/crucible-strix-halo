@@ -31,6 +31,14 @@ int main() {
     try {parse({"--streams","4","--conversation-cache-mib","64","--host-reserve-mib",value});}catch(const std::exception&){rejected=true;}
     assert(rejected);
   }
+  // serve --draft-blocks FILE replaces the embedded draft head; the path is absolute, empty means the default.
+  assert(parse({"--streams","4"}).draft_blocks.empty());
+  assert(parse({"--streams","4","--draft-blocks","/x/heads/a.txt"}).draft_blocks=="/x/heads/a.txt");
+  for (const char* bad : {"","heads/a.txt","/x/a\nb"}) {
+    bool threw=false;
+    try { parse({"--streams","4","--draft-blocks",bad}); } catch (const std::exception&) { threw=true; }
+    assert(threw);
+  }
   // the server's default MTP window sizes the slot MTP caches (draft_warmup.h MtpSlotRows); 256 unless set.
   assert(parse({"--streams","4"}).mtp_window==256);
   assert(parse({"--streams","4","--mtp-window","0"}).mtp_window==0);

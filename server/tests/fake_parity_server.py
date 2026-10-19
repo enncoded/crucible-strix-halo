@@ -3,6 +3,8 @@
 The IDs depend only on the request fields that a real exact engine keeps (messages, seed, temperature, sampling), so
 a serial and a `--streams 1` fake agree. `--streams` makes it a batch fake: it refuses the requests that the real batch
 server refuses. FAKE_PARITY_DIVERGE=<name part> makes the batch fake differ on a case.
+FAKE_HEADS_DIVERGE=<name part> makes a fake with --draft-blocks differ on a case (serve_parity.py heads).
+FAKE_ENGINE_DIVERGE=<engine> makes the fake of that --engine value differ on every case.
 """
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +33,8 @@ def has_image(body):
 class Handler(BaseHTTPRequestHandler):
     batch = False
     vision = False
+    blocks = False
+    engine_diverge = False
     seen = set()
 
     def log_message(self, *_):
@@ -55,6 +59,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {"error": {"message": "start serve with --vision"}})
         marker = os.environ.get("FAKE_PARITY_DIVERGE", "")
         diverge = self.batch and bool(marker) and marker in json.dumps(body["messages"])
+        heads = os.environ.get("FAKE_HEADS_DIVERGE", "")
+        diverge |= self.blocks and bool(heads) and heads in json.dumps(body["messages"])
+        diverge |= self.engine_diverge
         ids = make_ids(body, diverge)
         key = json.dumps(body["messages"][:1])
         hit = key in self.seen and body.get("cache_control") != "bypass"
@@ -77,7 +84,10 @@ def main():
     parser.add_argument("--prefill")
     parser.add_argument("--conversation-cache-mib")
     parser.add_argument("--session-replay")
+    parser.add_argument("--draft-blocks")
     args = parser.parse_args()
+    Handler.blocks = args.draft_blocks is not None
+    Handler.engine_diverge = bool(args.engine) and args.engine == os.environ.get("FAKE_ENGINE_DIVERGE")
     Handler.batch = not args.serial  # a missing --streams is --streams 1
     Handler.vision = args.vision
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

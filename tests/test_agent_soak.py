@@ -1,10 +1,16 @@
 """CPU tests for tools/agent_soak.py: the soak rule, synthetic content, and stream parsing (no server)."""
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
+import tempfile
+import time
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import agent_soak as soak
@@ -101,6 +107,25 @@ class StreamTest(unittest.TestCase):
         self.assertIn("--streams 4 --ctx 131072", soak.AGENT_SCENARIOS["agents"][1])
         self.assertEqual(soak.AGENT_SCENARIOS["served3"], (3, soak.SERVED))
 
+    def test_agents6_runs_six_agent_sessions_with_the_agents_settings(self):
+        # the agents sessions, six at once; only the slot count of the default layout differs.
+        count, layout = soak.AGENT_SCENARIOS["agents6"]
+        self.assertEqual(count, 6)
+        self.assertEqual(layout.replace("--streams 6 ", "--streams 4 "), soak.AGENT_SCENARIOS["agents"][1])
+        seen = []
+
+        def fake_session(name, kind, args, model, rows, lock):
+            seen.append((name, kind, args.thinking, args.reasoning_history, args.max_tokens, model))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "a6.json"
+            argv = ["agent_soak.py", "agents6", str(out), "--url", "http://127.0.0.1:9", "--model", "m"]
+            with mock.patch.object(soak, "run_session", fake_session), mock.patch.object(soak.time, "sleep"), \
+                    mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(soak.main(), 0)
+            self.assertEqual(json.loads(out.read_text())["scenario"], "agents6")
+        self.assertEqual(sorted(seen), [(f"agent-{i}", "agent", "on", "drop", 768, "m") for i in range(6)])
+
     def test_parse_stream(self):
         chunks = [dict(choices=[dict(delta=dict(reasoning_content="think "))]),
                   dict(choices=[dict(delta=dict(reasoning_content="more"))]),
@@ -174,6 +199,130 @@ class EnvironmentTest(unittest.TestCase):
             self.assertIsNone(soak.file_sha256(Path(tmp) / "missing"))
         source = Path(soak.__file__).read_text()
         self.assertIn("engine_sha256=file_sha256(args.engine)", source)
+
+    def test_the_report_records_the_checkpoint_it_served(self):
+        # gating_check.py --candidate compares the pack, streams and cache of the soak with the env file.
+        source = Path(soak.__file__).read_text()
+        self.assertIn('checkpoint=str(args.checkpoint or "") if args.tree else None', source)
+
+
+class R2Test(unittest.TestCase):
+    """the image turn before the sessions and the MemAvailable floor."""
+
+    def meminfo(self, tmp, kb):
+        path = Path(tmp) / "meminfo"
+        path.write_text(f"MemTotal: 131072000 kB\nMemAvailable: {kb} kB\n" if kb is not None else "MemTotal: 1 kB\n")
+        return path
+
+    def test_memavailable_is_read_in_kb_or_none(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(soak.memavailable_kb(self.meminfo(tmp, 12345678)), 12345678)
+            self.assertIsNone(soak.memavailable_kb(self.meminfo(tmp, None)))
+            self.assertIsNone(soak.memavailable_kb(Path(tmp) / "missing"))
+
+    def test_the_sampler_keeps_the_lowest_value(self):
+        # no timing windows. run() reads the given values in order; the read after the last stops it.
+        values = iter([20000000, None, 15000000, 18000000])
+        sampler = None
+
+        def read(path):
+            value = next(values, "end")
+            if value == "end":
+                sampler.stopped.set()
+                return None
+            return value
+
+        sampler = soak.MemorySampler(interval=0, read=read)
+        sampler.run()
+        self.assertEqual((sampler.lowest_kb, sampler.samples), (15000000, 3))
+        started = soak.MemorySampler(interval=60, read=lambda path: 1000)
+        started.start()
+        started.stop()  # the first read comes before the first wait, so a started sampler has one sample
+        self.assertEqual((started.samples, started.is_alive()), (1, False))
+        soak.MemorySampler(read=read).stop()  # never started (the server did not start): no error
+
+    LOG = ("conversation cache: 26843545600 bytes budget, host reserve 8192 MiB\n"
+           "slot checkpoints: 3 per slot, 152055808 bytes each, 1824669696 bytes from the cache budget\n"
+           'crucible_turn {"request_id": 1, "cache_bytes": 6357545336, "host_free_mib": 30000}\n'
+           'crucible_turn {"request_id": 2, "cache_bytes": 20610000000, "host_free_mib": 18000}\n'
+           'crucible_turn {"request_id": 3, "cache_bytes": 13000000000}\n')
+
+    def test_the_cache_record_comes_from_the_server_log(self):
+        self.assertEqual(soak.cache_record(self.LOG), dict(budget_bytes=26843545600, checkpoint_bytes=1824669696,
+                                                           high_water_bytes=20610000000))
+        self.assertIsNone(soak.cache_record(self.LOG.split("crucible_turn")[0]))  # no turn: no high-water
+        self.assertIsNone(soak.cache_record("crucible_turn {\"cache_bytes\": 1}\n"))  # no budget line
+        no_checkpoints = "\n".join(line for line in self.LOG.splitlines() if not line.startswith("slot"))
+        self.assertEqual(soak.cache_record(no_checkpoints)["checkpoint_bytes"], 0)
+
+    def test_the_floor_judges_the_lowest_value_projected_to_a_full_cache(self):
+        # deep305 had 18,108 MiB at a 20.61 GB high-water of a 25,600 MiB budget (1.82 GB checkpoints).
+        passed = soak.check(turns([(20000, 0), (21000, 20000)]))
+        cache = soak.cache_record(self.LOG)
+        unfilled = (26843545600 - 1824669696 - 20610000000) >> 20
+        self.assertEqual(unfilled, 4204)
+        ok = soak.apply_memory_floor(passed, 18108 * 1024, 10, 12288, cache)
+        self.assertEqual((ok["verdict"], ok["memory"]["projected_memavailable_mib"]), ("PASS", 18108 - 4204))
+        self.assertEqual(ok["memory"]["high_water_bytes"], 20610000000)
+        # Above the floor as measured, under it at a full cache: FAIL.
+        low = soak.apply_memory_floor(passed, 15000 * 1024, 10, 12288, cache)
+        self.assertEqual(low["verdict"], "FAIL")
+        self.assertEqual(low["failures"][-1], dict(rule="memory", lowest_memavailable_mib=15000, unfilled_mib=4204,
+                                                   projected_memavailable_mib=15000 - 4204, floor_mib=12288))
+        full = dict(cache, high_water_bytes=cache["budget_bytes"])  # over the budget: nothing to project
+        self.assertEqual(soak.apply_memory_floor(passed, 12288 * 1024, 10, 12288, full)["verdict"], "PASS")
+        self.assertEqual(soak.apply_memory_floor(passed, 12287 * 1024, 10, 12288, full)["verdict"], "FAIL")
+        self.assertEqual(soak.apply_memory_floor(passed, None, 0, 12288, cache)["verdict"], "ERROR")
+        none = soak.apply_memory_floor(passed, 20000 * 1024, 10, 12288, None)
+        self.assertEqual((none["verdict"], none["error"]), ("ERROR", "no cache record in the server log"))
+        self.assertEqual(soak.apply_memory_floor(passed, 1024, 5, None)["verdict"], "PASS")  # a record only
+        failed = dict(passed, verdict="FAIL")
+        self.assertEqual(soak.apply_memory_floor(failed, 1024, 5, 12288, cache)["failures"], [])  # the first cause stays
+
+    def test_image_size_needs_width_x_height(self):
+        self.assertEqual(soak.image_size("2560x1440"), "2560x1440")
+        for bad in ("2560", "0x10", "ax1", "10x"):
+            with self.assertRaises(Exception):
+                soak.image_size(bad)
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is needed for the image request")
+    def test_image_first_sends_one_cold_image_request(self):
+        import http.server
+        import threading
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+                body = json.dumps(dict(usage=dict(prompt_tokens=3630))).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            record = soak.image_first(f"http://127.0.0.1:{server.server_address[1]}", "crucible", "256x256", 30)
+        finally:
+            server.shutdown()
+        self.assertEqual((record["status"], record["prompt_tokens"], record["size"]), (200, 3630, "256x256"))
+        ((path, body),) = seen
+        self.assertEqual(path, "/v1/chat/completions")
+        self.assertEqual((body["cache_control"], body["max_tokens"], body["stream"]), ("bypass", 1, False))
+        parts = body["messages"][0]["content"]
+        self.assertTrue(parts[0]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    def test_main_wires_the_options_into_the_report(self):
+        source = Path(soak.__file__).read_text()
+        self.assertIn("first = image_first(args.url, model, args.image_first, args.request_timeout)", source)
+        self.assertIn("report = apply_memory_floor(report, sampler.lowest_kb, sampler.samples, args.memory_floor_mib, cache)",
+                      source)
+        self.assertIn('cache = cache_record(args.output.with_suffix(".server.log").read_text(', source)
 
 
 if __name__ == "__main__":

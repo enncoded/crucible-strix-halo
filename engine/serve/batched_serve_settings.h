@@ -32,6 +32,9 @@ struct BatchedServeSettings {
   // The server's default MTP window (serve --mtp-window). It sizes each slot's MTP cache (draft_warmup.h MtpSlotRows,
   // an earlier change); 0 (the whole prompt) keeps the context. Requests still choose their own window.
   int mtp_window=kDefaultMtpPrefix;
+  // serve --draft-blocks FILE: the block IDs of the served draft head; empty keeps the embedded 64K head.
+  // The head changes only drafts, never an output.
+  std::string draft_blocks;
 };
 inline BatchedServeSettings ParseBatchedServeSettings(std::span<const std::string_view> args) {
   if (args.size()%2) throw std::invalid_argument("batch options need a value after each switch");
@@ -92,6 +95,12 @@ inline BatchedServeSettings ParseBatchedServeSettings(std::span<const std::strin
     else if (key=="--mtp-window") {
       result.mtp_window=ServeNumber<int>(value);
       if (result.mtp_window<0 || result.mtp_window>262144) throw std::invalid_argument("mtp-window must be in [0,262144]");
+    }
+    else if (key=="--draft-blocks") {
+      if (value.empty() || value.front()!='/' || value.size()>4096 ||
+          std::any_of(value.begin(),value.end(),[](char c){return static_cast<unsigned char>(c)<0x20 || c==0x7f;}))
+        throw std::invalid_argument("draft-blocks must be an absolute file path");
+      result.draft_blocks=std::string(value);
     }
     else if (key=="--vision") {
       const int parsed=ServeNumber<int>(value);

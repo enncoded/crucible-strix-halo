@@ -105,7 +105,8 @@ def _cache_fields(event):
     fields = {key: event[key] for key in CACHE_INT_FIELDS if type(event.get(key)) is int}
     if type(event.get("cache_save_refused")) is str:
         fields["cache_save_refused"] = event["cache_save_refused"]
-    if type(event.get("cached_tokens")) is int:
+    # A count from the opened event comes with no cache class (request_line): replay_hit is then unknown, not false.
+    if type(event.get("cached_tokens")) is int and not event.get("cache_class_unknown"):
         fields["replay_hit"] = bool(event["cached_tokens"]) and event.get("session_replay") is True
     if event.get("slot_resume") is True:
         fields["slot_resume"] = True  # the replay state was still on the slot: no host restore
@@ -115,6 +116,33 @@ def _cache_fields(event):
 
 
 ENGINE_DRAFT_FIELDS = ("draft_proposed", "draft_accepted", "spec_steps")
+# Draft positions K and the list fields of the done event: counts by position 1..K and
+# by draft length 0..K. draft_passes and draft_ms follow. All are counters of the engine's accept step.
+DRAFT_POSITIONS = 7
+DRAFT_LIST_FIELDS = (("draft_pos_proposed", DRAFT_POSITIONS), ("draft_pos_tested", DRAFT_POSITIONS),
+                     ("draft_pos_accepted", DRAFT_POSITIONS), ("draft_len_hist", DRAFT_POSITIONS + 1))
+
+
+def _count_list(value, size):
+    """True for a list of `size` non-negative ints (a bool is not a count)."""
+    return type(value) is list and len(value) == size and all(type(n) is int and n >= 0 for n in value)
+
+
+def draft_position_fields(events):
+    """The position counters of the engine's done events, summed; {} unless every event has all six, well formed."""
+    try:
+        if not events or not all(
+                all(_count_list(event.get(name), size) for name, size in DRAFT_LIST_FIELDS) and
+                type(event.get("draft_passes")) is int and event["draft_passes"] >= 0 and
+                type(event.get("draft_ms")) in (int, float) and 0 <= event["draft_ms"] < 1e12
+                for event in events):
+            return {}
+        fields = {name: [sum(column) for column in zip(*(event[name] for event in events))]
+                  for name, _ in DRAFT_LIST_FIELDS}
+        return fields | dict(draft_passes=sum(event["draft_passes"] for event in events),
+                             draft_ms=float(sum(event["draft_ms"] for event in events)))
+    except (AttributeError, TypeError, ValueError):  # A counter must never fail a request.
+        return {}
 
 
 def draft_fields(*parts):
@@ -132,7 +160,8 @@ def draft_fields(*parts):
         reported = [event for ok, (_, event) in zip(engine, parts) if ok]
         return dict(spec_rounds=sum(event["spec_steps"] for event in reported),
                     draft_accepted=sum(event["draft_accepted"] for event in reported),
-                    draft_proposed=sum(event["draft_proposed"] for event in reported))
+                    draft_proposed=sum(event["draft_proposed"] for event in reported),
+                    **draft_position_fields(reported))
     if not counted: return None
     rounds = sum(turn["spec_rounds"] for turn in counted)
     return dict(spec_rounds=rounds, draft_accepted=sum(turn.get("round_tokens", 0) for turn in counted) - rounds)
@@ -333,15 +362,16 @@ def request_line(first_turn, event, closed=None, cont_turn=None, cont_event=None
     """
     summary = finalize(first_turn, event if cont_turn is None else {})
     if cont_turn is None:
+        if event.get("event") != "done":
+            # the server cancelled the job before its done event (no room after the think cap, or a stop
+            # string). Its opened event and its chunks still name the restore and the rows it prefilled.
+            summary = dict(summary or {}, prefill_tokens=_chunk_rows(first_turn))
+            event = dict(event, cached_tokens=_opened(first_turn), cache_class_unknown=True)
         return turn_line(summary, event, draft_fields((first_turn, event)), load_fields((first_turn,)))
-    chunks = first_turn.get("prefill_chunks") or []
-    fields = dict(summary or {}, prefill_tokens=sum(chunk[2] for chunk in chunks) if first_turn.get("chunk_count")
-                  and len(chunks) == first_turn["chunk_count"] and all(type(c[2]) is int for c in chunks) else None,
-                  t_done=cont_turn.get("t_done"))
-    opened = first_turn.get("opened_cached")
+    fields = dict(summary or {}, prefill_tokens=_chunk_rows(first_turn), t_done=cont_turn.get("t_done"))
     # The first job is cancelled before its done event: the cache after the turn is the continuation's report.
     after = {key: cont_event[key] for key in CACHE_INT_FIELDS + ("cache_save_refused",) if key in (cont_event or {})}
-    line = turn_line(fields, dict(event, **after, cached_tokens=opened if type(opened) is int else None),
+    line = turn_line(fields, dict(event, **after, cached_tokens=_opened(first_turn), cache_class_unknown=True),
                      draft_fields((first_turn, None), (cont_turn, cont_event)), load_fields((first_turn, cont_turn)))
     cont = finalize(cont_turn, cont_event) or {}
     extra = dict(think_closed_at=closed.tokens, think_closed_by=closed.by, cont_request_id=cont_turn.get("request_id"),
@@ -363,6 +393,20 @@ def request_line(first_turn, event, closed=None, cont_turn=None, cont_event=None
         return "crucible_turn " + json.dumps(merged, allow_nan=False)
     except (TypeError, ValueError):  # A log line must never stop the request.
         return line
+
+
+def _opened(turn):
+    """The restore that the batch engine named in the job's opened event, or None (serial backend)."""
+    opened = turn.get("opened_cached")
+    return opened if type(opened) is int else None
+
+
+def _chunk_rows(turn):
+    """The prompt rows that the job's chunks prefilled, or None when a chunk record is missing."""
+    chunks = turn.get("prefill_chunks") or []
+    if turn.get("chunk_count") and len(chunks) == turn["chunk_count"] and all(type(c[2]) is int for c in chunks):
+        return sum(chunk[2] for chunk in chunks)
+    return None
 
 
 def _closed_classes(first_turn, cont_turn, closed_at, forced, total):

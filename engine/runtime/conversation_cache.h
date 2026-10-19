@@ -15,6 +15,10 @@ template <class Snapshot, class Policy = int>
 class PrefixCache {
  public:
   explicit PrefixCache(size_t budget) : budget_(budget) {}
+  // A named functor, not a lambda, as the default template argument: GCC 13 fails the deduction for a lambda type.
+  struct AcceptAny {
+    constexpr bool operator()(const Snapshot&) const { return true; }
+  };
   // Batch retention fields (BatchConversationCache). Serial serve leaves them at zero.
   struct Entry {
     std::vector<int> ids;
@@ -28,14 +32,14 @@ class PrefixCache {
     uint64_t active = 0;     // the session clock at the last save or hit that is not on probation
     double active_at = 0;    // the wall clock (seconds) at that save or hit
   };
-  template<class Accept = decltype([](const Snapshot&) { return true; })>
+  template<class Accept = AcceptAny>
   std::shared_ptr<const Snapshot> Find(std::span<const int> ids, const Policy& policy,
                                        size_t max_length = SIZE_MAX, Accept accept = {}) {
     Entry* found = FindEntry(ids, policy, max_length, accept);
     return found ? found->snapshot : nullptr;
   }
   // As Find, but returns the hit entry (now the most recent) for the caller's retention fields.
-  template<class Accept = decltype([](const Snapshot&) { return true; })>
+  template<class Accept = AcceptAny>
   Entry* FindEntry(std::span<const int> ids, const Policy& policy, size_t max_length = SIZE_MAX, Accept accept = {}) {
     auto best = entries_.end();
     for (auto it = entries_.begin(); it != entries_.end(); ++it) {
@@ -49,7 +53,7 @@ class PrefixCache {
     return &entries_.front();
   }
   // The length that FindEntry would return, without a change to the LRU order or the marks (0: none).
-  template<class Accept = decltype([](const Snapshot&) { return true; })>
+  template<class Accept = AcceptAny>
   size_t Longest(std::span<const int> ids, const Policy& policy, size_t max_length = SIZE_MAX, Accept accept = {}) const {
     size_t best = 0;
     for (const auto& entry : entries_)
@@ -110,12 +114,18 @@ class PrefixCache {
   // never leaves. When the evictable entries cannot make the room, nothing is evicted.
   template<class Tier>
   bool ReserveHost(size_t bytes, uint64_t available, uint64_t reserve, Tier tier) {
+    return ReserveHost(bytes, bytes, available, reserve, tier, [](const Entry& entry) { return entry.bytes; });
+  }
+  // a save that shares host chunks with a held snapshot needs only `host_bytes` of new host memory, and an
+  // eviction frees only `freed(entry)` of host memory (its chunks that no other snapshot uses). The budget still
+  // counts every entry at its whole size.
+  template<class Tier, class Freed>
+  bool ReserveHost(size_t bytes, size_t host_bytes, uint64_t available, uint64_t reserve, Tier tier, Freed freed) {
     if (!bytes || bytes > budget_) return false;
-    const uint64_t needed = reserve + bytes;
+    const uint64_t needed = reserve + host_bytes;
     const uint64_t short_by = needed > available ? needed - available : 0;
     const size_t over = bytes_ + bytes > budget_ ? bytes_ + bytes - budget_ : 0;
-    const uint64_t free = std::max<uint64_t>(over, short_by);
-    if (!free) return true;
+    if (!over && !short_by) return true;
     std::vector<std::pair<int, typename std::list<Entry>::iterator>> order;
     for (auto it = entries_.end(); it != entries_.begin();) {
       --it;
@@ -123,10 +133,14 @@ class PrefixCache {
       if (rank >= 0) order.emplace_back(rank, it);
     }
     std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    uint64_t room = 0;
+    uint64_t room = 0, host_room = 0;
     size_t victims = 0;
-    while (room < free && victims < order.size()) room += order[victims++].second->bytes;
-    if (room < free) return false;
+    while ((room < over || host_room < short_by) && victims < order.size()) {
+      room += order[victims].second->bytes;
+      host_room += freed(static_cast<const Entry&>(*order[victims].second));
+      ++victims;
+    }
+    if (room < over || host_room < short_by) return false;
     for (size_t i = 0; i < victims; ++i) Evict(order[i].second, order[i].first);
     return true;
   }

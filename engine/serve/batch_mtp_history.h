@@ -15,13 +15,12 @@ namespace crucible {
 inline bool BatchMtpHistory(const ServeRequest& r) {
   return r.spec > 0 && r.max_tokens > 1 && r.mtp_prefix == 0;
 }
-// The longest restore. A bounded window rebuilds its warm-up from the prefill rows, so a restore stops before them;
-// the full window continues the restored MTP rows instead.
+// The longest restore: every request stops one row early (the last prompt row gives the first token's logits).
+// A bounded window that restores past its warm-up start warms the MTP from the restored length (Open: origin), as
+// a tail restore does: drafts change, the output does not. Before an earlier change the restore stopped at the warm-up start, so
+// an identical re-send whose last grid frontier lay in its last mtp_prefix rows prefilled the whole prompt.
 inline size_t BatchRestoreLimit(const ServeRequest& r) {
-  if (r.ids.size() < 2) return 0;
-  const size_t last = r.ids.size() - 1;
-  if (r.spec <= 0 || r.max_tokens <= 1 || BatchMtpHistory(r)) return last;
-  return std::min(last, DraftWarmupStart(r.ids.size(), r.mtp_prefix));
+  return r.ids.size() < 2 ? 0 : r.ids.size() - 1;
 }
 // What a slot's MTP cache holds after a full warm-up to `length` target rows: the pairs of rows [0, length - 1),
 // each row's trunk stack with the token after it, at MTP positions equal to the rows. The carry buffer holds the

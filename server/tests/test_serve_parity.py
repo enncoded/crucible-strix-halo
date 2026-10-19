@@ -195,3 +195,84 @@ def test_serve_args_batch_adds_one_stream_only():
     assert batch[batch.index("--streams") + 1] == "1"
     assert batch[:-2] == serial[:-1] and (serial[-1], batch[-2:]) == ("--serial", ["--streams", "1"])
     assert "--vision" in serial and "--session-replay" in serial
+
+
+def test_heads_runs_the_default_then_each_block_file(tmp_path):
+    # serve --draft-blocks: one batch server per head, in turn; every head must give the IDs of the
+    # built-in head.
+    first = free_ports(3)[0]
+    heads = []
+    for name, text in (("full", ",".join(map(str, range(1940)))), ("one", "1937")):
+        path = tmp_path / f"{name}.txt"
+        path.write_text(text + "\n")
+        heads.append(f"{name}={path}")
+    out = tmp_path / "heads.json"
+    argv = ["heads", "ENGINE", "CKPT", "--out", str(out), "--port-base", str(first),
+            "--server-command", f"{sys.executable} {FAKE}"]
+    for head in heads:
+        argv += ["--blocks", head]
+    assert parity.main(argv) == 0
+    report = json.loads(out.read_text())
+    assert report["status"] == "PASS" and set(report["runs"]) == {"full", "one"}
+    for run in report["runs"].values():
+        assert run["status"] == "PASS" and run["summary"]["FAIL"] == 0 and run["summary"]["PASS"] > 10
+    logs = {name: out.with_suffix(f".{name}.log") for name in ("default", "full", "one")}
+    assert all(path.exists() for path in logs.values())
+    for port in (first, first + 1, first + 2):
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0
+
+
+def test_heads_fails_when_a_head_changes_an_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_HEADS_DIVERGE", "lighthouse")
+    path = tmp_path / "one.txt"
+    path.write_text("1937\n")
+    out = tmp_path / "heads.json"
+    code = parity.main(["heads", "ENGINE", "CKPT", "--out", str(out), "--port-base", str(free_ports(2)[0]),
+                        "--server-command", f"{sys.executable} {FAKE}", "--blocks", f"one={path}"])
+    report = json.loads(out.read_text())
+    assert code == 1 and report["status"] == "FAIL" and report["runs"]["one"]["summary"]["FAIL"] > 0
+
+
+def test_heads_server_args_add_the_block_file_to_a_batch_server():
+    args = parity.parser_for().parse_args(["heads", "E", "C", "--out", "o.json", "--blocks", "one=/x/one.txt"])
+    assert args.blocks == [("one", Path("/x/one.txt"))]
+    command = parity.serve_args(args, "batch", 9000) + ["--draft-blocks", "/x/one.txt"]
+    assert command[command.index("--streams") + 1] == "1" and "--serial" not in command
+    for bad in ("one", "=/x", "One=/x/a.txt", "one=x.txt"):
+        with pytest.raises(SystemExit):
+            parity.parser_for().parse_args(["heads", "E", "C", "--out", "o.json", "--blocks", bad])
+
+
+def test_batch_against_batch_has_no_known_gap_and_needs_mostly_200():
+    # two batch servers must agree on a gap case too; a 200 against a 400 is a FAIL.
+    gap = case("g", gap=True)
+    assert parity.judge(gap, ok([1]), refused(), gaps=False)["verdict"] == "FAIL"
+    assert parity.judge(gap, refused(), refused(), gaps=False)["verdict"] == "PASS"
+    assert parity.judge(gap, ok([1]), ok([1]), gaps=False)["verdict"] == "PASS"
+    # A set where most cases are refused on both sides proves nothing: FAIL.
+    cases = [case("a"), case("b"), case("c")]
+    one_ok = {"a": ok([1]), "b": refused(), "c": refused()}
+    report = parity.compare(cases, one_ok, dict(one_ok))
+    assert report["status"] == "FAIL" and report["summary"]["FAIL"] == 0 and report["answered"] == 1
+    two_ok = {"a": ok([1]), "b": ok([2]), "c": refused()}
+    assert parity.compare(cases, two_ok, dict(two_ok))["status"] == "PASS"
+
+
+def test_heads_with_a_baseline_engine_proves_the_default_path(tmp_path, monkeypatch):
+    # the old binary's default path against the new binary's default path, then each head file against
+    # the new default. FAKE_ENGINE_DIVERGE makes the server of that engine differ.
+    path = tmp_path / "one.txt"
+    path.write_text("1937\n")
+    out = tmp_path / "heads.json"
+    argv = ["heads", "NEW", "CKPT", "--baseline-engine", "OLD", "--out", str(out), "--port-base",
+            str(free_ports(3)[0]), "--server-command", f"{sys.executable} {FAKE}", "--blocks", f"one={path}"]
+    assert parity.main(argv) == 0
+    report = json.loads(out.read_text())
+    assert set(report["runs"]) == {"default", "one"} and report["status"] == "PASS"
+    assert report["runs"]["default"]["reference"] == "baseline" and report["runs"]["one"]["reference"] == "default"
+    assert all(out.with_suffix(f".{tag}.log").exists() for tag in ("baseline", "default", "one"))
+    monkeypatch.setenv("FAKE_ENGINE_DIVERGE", "OLD")
+    assert parity.main(argv) == 1
+    report = json.loads(out.read_text())
+    assert report["runs"]["default"]["status"] == "FAIL" and report["runs"]["one"]["status"] == "PASS"

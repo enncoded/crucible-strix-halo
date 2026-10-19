@@ -78,8 +78,25 @@ def _valid_counts(doc, day):
         for name, entry in cats.items())
 
 
+def write_day_file(directory, path, data, day_start):
+    """Write DATA to PATH as a private file: a temp file in DIRECTORY, fsync, then rename, then the day's time."""
+    fd, temp = tempfile.mkstemp(dir=directory, prefix=".draft-", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.unlink(temp)
+        raise
+    os.utime(path, (day_start, day_start), follow_symlinks=False)
+
+
 class DraftCapture:
-    def __init__(self, directory, *, mode, max_bytes=8 << 30, clock=time.time):
+    def __init__(self, directory, *, mode, max_bytes=8 << 30, clock=time.time, draft_stats=False):
         # mode has no default: only the exact value "tokens" writes token IDs (the user's approval).
         directory = Path(directory)
         if not directory.is_absolute():
@@ -96,6 +113,16 @@ class DraftCapture:
             raise RuntimeError("another server writes this draft capture directory") from None
         self.lock = threading.Lock()
         self.day, self.doc, self.last_write, self.dropped = None, None, 0.0, 0
+        self.stats = None
+        if draft_stats:   # per-token acceptance counters (server/draft_stats.py); counts files only
+            from .draft_stats import DraftStats
+            self.stats = DraftStats(self)
+
+    def record_draft(self, *, tools, thinking, events):
+        """Add the per-token draft counters of a finished turn (the done events of its jobs), if the flag is on."""
+        if self.stats is not None:
+            with self.lock:
+                self.stats.record(turn_class(tools, thinking), events)
 
     def _today(self):
         return time.strftime("%Y-%m-%d", time.gmtime(self.clock()))
@@ -146,21 +173,8 @@ class DraftCapture:
     def _flush(self):
         if self.doc is None:
             return
-        path = self._counts_path(self.day)
-        fd, temp = tempfile.mkstemp(dir=self.dir, prefix=".draft-counts-", suffix=".tmp")
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(json.dumps(self.doc, separators=(",", ":")).encode())
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp, path)
-        except BaseException:
-            if os.path.exists(temp):
-                os.unlink(temp)
-            raise
-        start = self._day_start(self.day)
-        os.utime(path, (start, start), follow_symlinks=False)
+        write_day_file(self.dir, self._counts_path(self.day), json.dumps(self.doc, separators=(",", ":")).encode(),
+                       self._day_start(self.day))
         self.last_write = self.clock()
 
     def _spool_bytes(self):
@@ -187,7 +201,11 @@ class DraftCapture:
     def close(self):
         with self.lock:
             try:
-                self._flush()
+                try:
+                    if self.stats is not None:
+                        self.stats.flush()
+                finally:
+                    self._flush()
             finally:
                 if self.lock_fd is not None:
                     os.close(self.lock_fd)       # closing the descriptor releases the flock

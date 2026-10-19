@@ -12,16 +12,80 @@ static SlotCheckpoint Point(const std::vector<int>& ids, size_t length, Checkpoi
   return {std::vector<int>(ids.begin(), ids.begin() + std::ptrdiff_t(length)), {}, 0, false, kind, owner};
 }
 
-int main() {
+static SlotCheckpoint Frontier(const std::vector<int>& ids, size_t length, uint64_t owner, bool speculative = false) {
+  auto point = Point(ids, length, CheckpointKind::Frontier, owner);
+  point.frontier = {length, speculative, false};
+  return point;
+}
+
+// Frontier points.
+static void Frontiers() {
   const auto prompt = Tokens(100);
   SlotCheckpoints c(2);
-  // Three buffers: the turn start, the last grid point and the prompt end of one request.
+  // A Frontier point never takes a general buffer through Victim, and a general point never takes the Frontier
+  // buffer.
+  bool threw = false;
+  try { c.Victim(0, Below(prompt, 8), CheckpointKind::Frontier, 1); } catch (const std::invalid_argument&) { threw = true; }
+  assert(threw);
+  // Request 1: its confirmed frontier (8) takes the Frontier buffer, its header grid point (16) an empty general
+  // buffer (MEDIUM-4: both stay).
+  auto pick = c.FrontierVictim(0, Below(prompt, 8), 1);
+  assert(!pick.held && pick.index == kFrontierCheckpoint);
+  c.Store(0, *pick.index, Frontier(prompt, 8, 1));
+  pick = c.FrontierVictim(0, Below(prompt, 16), 1);
+  assert(!pick.held && pick.index == 0);
+  c.Store(0, 0, Frontier(prompt, 16, 1, true));
+  assert((c.Frontiers(0) == std::vector<int>{0, kFrontierCheckpoint}) && c.FrontierLength(0) == 16);
+  pick = c.FrontierVictim(0, Below(prompt, 16), 1);
+  assert(pick.held && pick.index == 0);  // the slot holds it already, in buffer 0
+  // The End point of the prompt takes the other general buffer; a third frontier of the same request then finds no
+  // buffer: the host copies it.
+  c.Store(0, *c.Victim(0, Below(prompt, 20), CheckpointKind::End, 1), Point(prompt, 20, CheckpointKind::End, 1));
+  pick = c.FrontierVictim(0, Below(prompt, 24), 1);
+  assert(!pick.held && !pick.index);
+  // A general point leaves the shortest general point: here the header Frontier point (16) before the End point.
+  assert(*c.Victim(0, Below(prompt, 40), CheckpointKind::Grid, 2) == 0);
+  bool stored = false;
+  try { c.Store(0, kFrontierCheckpoint, Point(prompt, 40, CheckpointKind::Grid, 2)); } catch (const std::invalid_argument&) {
+    stored = true;
+  }
+  assert(stored);
+  // The next request's frontier replaces the older request's point in the Frontier buffer (a prefix of it).
+  pick = c.FrontierVictim(0, Below(prompt, 32), 2);
+  assert(!pick.held && pick.index == kFrontierCheckpoint);
+  c.Store(0, kFrontierCheckpoint, Frontier(prompt, 32, 2, true));
+  // Best with the host rule: a refused Frontier point leaves the next longest point.
+  assert(*c.Best(0, prompt) == kFrontierCheckpoint);
+  const auto host_rule = [](const SlotCheckpoint& point) { return point.kind != CheckpointKind::Frontier; };
+  assert(c.At(0, *c.Best(0, prompt, host_rule)).hist.size() == 20);
+  // A hit confirms a speculative point; Confirm leaves other kinds alone.
+  assert(c.At(0, kFrontierCheckpoint).frontier.speculative);
+  c.Confirm(0, kFrontierCheckpoint);
+  c.Confirm(0, 1);
+  assert(!c.At(0, kFrontierCheckpoint).frontier.speculative && c.At(0, 1).kind == CheckpointKind::End);
+  // HIGH-1: a Frontier point needs a whole 128-row pool block and prefill chunk, and no pending rows.
+  assert(SlotFrontierGrid(4096, 4096) && SlotFrontierGrid(256, 128) && SlotFrontierGrid(128, 8));
+  assert(!SlotFrontierGrid(8, 8) && !SlotFrontierGrid(136, 8) && !SlotFrontierGrid(0, 8) && !SlotFrontierGrid(4096, 0));
+  assert(!SlotFrontierGrid(4096, 4096, 3) && !SlotFrontierGrid(2048, 4096) && !SlotFrontierGrid(300, 100));
+  // Keep drops Frontier points as any other point.
+  c.Keep(0, 24);
+  assert(c.Frontiers(0) == std::vector<int>{0} && c.FrontierLength(0) == 16 && c.FrontierLength(1) == 0);
+}
+
+int main() {
+  static_assert(kGeneralCheckpoints == 2 && kSlotCheckpoints == 3, "a development branch T4 and one Frontier buffer");
+  const auto prompt = Tokens(100);
+  SlotCheckpoints c(2);
+  // One replayed turn takes three points in this order: its start on the tail (20), its last grid point (40) and
+  // its prompt end (60). With two buffers the turn start leaves at the prompt end (it is the shortest).
   for (const auto& [length, kind] : {std::pair{20, CheckpointKind::Start}, {40, CheckpointKind::Grid},
                                      {60, CheckpointKind::End}}) {
     const auto victim = c.Victim(0, Below(prompt, size_t(length)), kind, 1);
     assert(victim);
     c.Store(0, *victim, Point(prompt, size_t(length), kind, 1));
   }
+  assert(c.At(0, 0).hist.size() == 60 && c.At(0, 0).kind == CheckpointKind::End);
+  assert(c.At(0, 1).hist.size() == 40 && c.At(0, 1).kind == CheckpointKind::Grid);
   // A later grid point of the same request replaces its earlier one.
   assert(*c.Victim(0, Below(prompt, 50), CheckpointKind::Grid, 1) == 1);
   c.Store(0, 1, Point(prompt, 50, CheckpointKind::Grid, 1));
@@ -30,24 +94,32 @@ int main() {
   // Same length, other key: not the same state. Under the invariant (every point is a prefix of
   // the slot's rows, Keep) this cannot happen; if it does, the stale point is the one to replace.
   auto stale = prompt; stale[7] += 1 << 20;
-  assert(*c.Victim(0, Below(stale, 60), CheckpointKind::Start, 2) == 2);
+  assert(*c.Victim(0, Below(stale, 60), CheckpointKind::Start, 2) == 0);
   // The longest checkpoint that a prompt extends by at least one token.
-  assert(*c.Best(0, prompt) == 2 && c.At(0, 2).hist.size() == 60);
+  assert(*c.Best(0, prompt) == 0 && c.At(0, 0).hist.size() == 60);
   auto split = prompt; split[55] = -1;  // a token split inside the previous answer
   assert(c.At(0, *c.Best(0, split)).hist.size() == 50 && c.Common(0, split) == 50);
+  // A retry of the same request: the prompt-end point needs one more row, so the grid point serves it, as
+  // with three points.
+  const std::vector<int> retry(prompt.begin(), prompt.begin() + 60);
+  assert(c.At(0, *c.Best(0, retry)).hist.size() == 50);
+  // What two points give up: an edit between the turn start and the grid point (here at row 30) finds no point;
+  // three points resumed it at the turn start (20). The host frontiers still serve it.
+  auto edit = prompt; edit[30] = -4;
+  assert(!c.Best(0, edit) && c.Common(0, edit) == 0);
   assert(!c.Best(0, std::vector<int>(prompt.begin(), prompt.begin() + 20)));  // the last row must run
   assert(!c.Best(1, prompt) && c.Common(1, prompt) == 0);
   auto other = prompt; other[3] = -2;
   assert(!c.Best(0, other));
   // A new request: the shortest checkpoint leaves first.
-  assert(*c.Victim(0, Below(prompt, 70), CheckpointKind::End, 2) == 0);
+  assert(*c.Victim(0, Below(prompt, 70), CheckpointKind::End, 2) == 1);
   // A restore at 50 keeps the rows below it; a reset or host restore keeps none.
   c.Keep(0, 50);
   assert(c.At(0, *c.Best(0, prompt)).hist.size() == 50);
   c.Keep(0, 0);
   assert(!c.Best(0, prompt) && *c.Victim(0, Below(prompt, 10), CheckpointKind::End, 3) == 0);
   bool threw = false;
-  try { c.Store(0, 3, Point(prompt, 10, CheckpointKind::End, 3)); } catch (const std::invalid_argument&) { threw = true; }
+  try { c.Store(0, 2, Point(prompt, 10, CheckpointKind::End, 3)); } catch (const std::invalid_argument&) { threw = true; }
   assert(threw);
   // Points compare cache keys: the same tokens under another key (another image) do not match.
   auto keyed = Point(prompt, 30, CheckpointKind::End, 4);
@@ -64,5 +136,6 @@ int main() {
   keyed.key.pop_back();
   try { c.Store(1, 1, keyed); } catch (const std::invalid_argument&) { threw = true; }
   assert(threw);
+  Frontiers();
   return 0;
 }

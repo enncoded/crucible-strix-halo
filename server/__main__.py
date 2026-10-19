@@ -11,6 +11,10 @@ from .batch_scheduler import INTERLEAVE_MIN_ROWS
 from .http import Service, handler_for
 from .tokenization import ModelTokenizer
 
+# serve --draft-blocks: the engine's file limit (draft_policy.h kDraftBlocksFileMax).
+DRAFT_BLOCKS_FILE_MAX = 64 * 1024
+
+
 def main():
     parser = argparse.ArgumentParser(description="Temporary local Crucible server on 127.0.0.1:8790")
     parser.add_argument("checkpoint", type=Path)
@@ -120,6 +124,15 @@ def main():
                              "explicit approval.")
     parser.add_argument("--draft-capture-max-gib", type=int, default=None, metavar="1..1024",
                         help="tokens mode: the spool size limit over all days (default 8).")
+    parser.add_argument("--draft-blocks", type=Path, default=None, metavar="FILE",
+                        help="Batch mode: the draft head's 128-token vocabulary blocks (sorted unique IDs, comma-"
+                             "separated; default the built-in 64K head). It changes only the drafts, never an "
+                             "output.")
+    parser.add_argument("--draft-stats", action="store_true",
+                        help="Batch mode, default off (needs --draft-capture in counts mode): also write "
+                             "counts of draft tokens by position, turn class and rejected target token to "
+                             "DIR/draft-stats-DAY.json. Counts of single token IDs only; the engine merges each "
+                             "request before it reports.")
     parser.add_argument("--default-thinking", choices=("on", "off"), default="off",
                         help="Thinking for chat requests that set no thinking field. The checkpoint template, "
                              "other engines, and Halogen use on; off keeps older clients and benchmarks unchanged.")
@@ -132,7 +145,7 @@ def main():
     batch_only = {"--slot-resume": args.slot_resume, "--slot-checkpoints": args.slot_checkpoints,
                   "--packed-op": args.packed_op, "--prefill-interleave": args.prefill_interleave,
                   "--interleave-min-rows": args.interleave_min_rows,
-                  "--draft-capture": args.draft_capture}
+                  "--draft-capture": args.draft_capture, "--draft-blocks": args.draft_blocks}
     for flag, value in batch_only.items():
         if args.serial and value is not None:
             parser.error(f"{flag} needs the batched stack; do not use it with --serial")
@@ -146,11 +159,19 @@ def main():
         parser.error(f"--mtp-window must be in [0,{MAX_MTP_WINDOW}]")
     if args.draft_capture is not None and not args.draft_capture.is_absolute():
         parser.error("--draft-capture must be an absolute directory path")
+    if args.draft_stats and (args.draft_capture is None or args.draft_capture_mode != "counts" or args.serial):
+        parser.error("--draft-stats needs --draft-capture in counts mode and the batch server")
     if args.draft_capture is None and (args.draft_capture_mode != "counts" or args.draft_capture_max_gib is not None):
         parser.error("--draft-capture-mode and --draft-capture-max-gib need --draft-capture")
     if args.draft_capture_max_gib is not None and (args.draft_capture_mode != "tokens" or
                                                    not 1 <= args.draft_capture_max_gib <= 1024):
         parser.error("--draft-capture-max-gib needs --draft-capture-mode tokens and a value in [1,1024]")
+    if args.draft_blocks is not None:
+        if not args.draft_blocks.is_absolute() or not args.draft_blocks.is_file():
+            parser.error("--draft-blocks must be an absolute path of an existing file")
+        # The engine reads at most 64 KiB (kDraftBlocksFileMax); the full 1940-block selection is about 10 KB.
+        if not 0 < args.draft_blocks.stat().st_size <= DRAFT_BLOCKS_FILE_MAX:
+            parser.error(f"--draft-blocks must be a file of 1 to {DRAFT_BLOCKS_FILE_MAX} bytes")
     if args.max_thinking_tokens is not None and not 1 <= args.max_thinking_tokens <= 262144:
         parser.error("--max-thinking-tokens must be in [1,262144]")
     if not 1 <= args.ctx <= 262144:
@@ -208,6 +229,8 @@ def main():
     # Sent only when set, so the default engine command stays as before; the engine prints its reserve at startup.
     if args.host_reserve_mib is not None:
         engine_options += ("--host-reserve-mib", str(args.host_reserve_mib))
+    if args.draft_blocks is not None:
+        engine_options += ("--draft-blocks", str(args.draft_blocks))
     if not 1024 <= args.port <= 65535:
         parser.error("--port must be in [1024,65535]")
     if not args.model_id or len(args.model_id) > 200:
@@ -223,11 +246,13 @@ def main():
         from .draft_capture import DraftCapture
         try:
             capture = DraftCapture(args.draft_capture, mode=args.draft_capture_mode,
-                                   max_bytes=(args.draft_capture_max_gib or 8) << 30)
+                                   max_bytes=(args.draft_capture_max_gib or 8) << 30,
+                                   draft_stats=args.draft_stats)
         except (OSError, ValueError, RuntimeError) as error:
             print(f"draft capture: {error}", file=sys.stderr, flush=True)
             return 2
-        print(f"draft capture: {capture.mode} mode", file=sys.stderr, flush=True)
+        print(f"draft capture: {capture.mode} mode" + (", per-token draft stats on" if args.draft_stats else ""),
+              file=sys.stderr, flush=True)
     try:
         tokenizer = ModelTokenizer(args.checkpoint, content_special_tokens=args.content_special_tokens)
         if args.serial:
@@ -250,6 +275,7 @@ def main():
                                            cache_idle_minutes=args.cache_idle_minutes,
                                            engine_options=engine_options,
                                            lookup=args.lookup, mtp_window=args.mtp_window)
+            backend.draft_detail = args.draft_stats
         server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(
             Service(backend, tokenizer, args.model_id, clamp_max_tokens=args.clamp_max_tokens,
                     default_thinking=args.default_thinking == "on", max_body_mib=args.max_body_mib,

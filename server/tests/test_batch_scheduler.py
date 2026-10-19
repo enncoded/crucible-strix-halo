@@ -256,3 +256,109 @@ def test_interleave_passes_mirror_the_engine_rule():
     from server.batch_scheduler import interleave_passes
     assert interleave_passes(8) == 6 and interleave_passes(1) == 46 and interleave_passes(2) == 23
     assert interleave_passes(0) == 0 and interleave_passes(47) == 1 and interleave_passes(24) == 2
+
+
+class EncoderRowsTest(unittest.TestCase):
+    """SRPT and aging count the encoder slices that an image turn still owes, as prompt rows of equal time."""
+
+    def test_encoder_rows_are_slices_times_slice_time_times_rate(self):
+        from server.batch_scheduler import ENCODER_SLICE_SECONDS, encoder_rows
+        self.assertEqual(encoder_rows(29, ENCODER_SLICE_SECONDS, 1500.0), round(29 * 0.076 * 1500))  # 3,306 rows
+        self.assertEqual(encoder_rows(0, ENCODER_SLICE_SECONDS, 1500.0), 0)
+        self.assertEqual(encoder_rows(-1, ENCODER_SLICE_SECONDS, 1500.0), 0)
+
+    def backend(self):
+        backend = RestoredRemainingTest().backend()
+        backend.prefill_rate = 1500.0
+        def live(count, admitted, slices=0):
+            job = Job(dict(ids=list(range(count)), max_tokens=4, stop_ids=[], spec=0))
+            return LiveRequest(job, admitted_at=admitted, slot_context=262144, vision_slices=slices)
+        # A 2560x1440 screenshot turn (3,600 rows, 29 slices) and a text turn of 5,000 rows, admitted together.
+        backend.active = {1: live(3_600, 1.0, slices=29), 2: live(5_000, 1.0)}
+        return backend
+
+    def test_a_longer_text_turn_goes_before_an_image_turn_of_more_work(self):
+        backend = self.backend()
+        remaining = {item.request_id: item.remaining for item in backend._pending_prefills()}
+        self.assertEqual(remaining, {1: 3_600 + round(29 * 0.076 * 1500), 2: 5_000})
+        self.assertEqual(choose(1.5, [], backend._pending_prefills(), 0, backend.prefill_rate), ("prefill", 2))
+        # Before an earlier change the image turn ranked by its 3,600 prompt rows only and went first.
+        backend.active[1].vision_slices = 0
+        self.assertEqual(choose(1.5, [], backend._pending_prefills(), 0, backend.prefill_rate), ("prefill", 1))
+
+    def test_a_slice_command_lowers_the_remaining_work_and_feeds_the_slice_time(self):
+        backend = self.backend()
+        backend.script += [dict(event="batch_end", op="prefill")]
+        with patch("server.batch_backend.metrics.now", side_effect=[10.0, 10.1]):
+            backend._prefill(1)
+        entry = backend.active[1]
+        self.assertEqual((entry.vision_slices, entry.prefilled), (28, 0))
+        self.assertAlmostEqual(backend.encoder_slice_seconds, .7 * 0.076 + .3 * 0.1)
+        self.assertEqual(backend.prefill_rate, 1500.0)  # a slice is no prompt row
+        remaining = {item.request_id: item.remaining for item in backend._pending_prefills()}
+        self.assertEqual(remaining[1], 3_600 + round(28 * backend.encoder_slice_seconds * 1500))
+
+    def slice(self, backend, seconds, **patches):
+        backend.script += [dict(event="batch_end", op="prefill")]
+        with patch("server.batch_backend.metrics.now", side_effect=[10.0, 10.0 + seconds]):
+            if patches:
+                with patch.multiple(backend, **patches):
+                    backend._prefill(1)
+            else:
+                backend._prefill(1)
+
+    def test_each_slice_sample_is_held_to_the_band(self):
+        from server.batch_scheduler import ENCODER_SLICE_BAND
+        backend = self.backend()
+        self.slice(backend, 2.5)
+        self.assertAlmostEqual(backend.encoder_slice_seconds, .7 * 0.076 + .3 * ENCODER_SLICE_BAND[1])
+        self.assertEqual(backend.active[1].vision_slices, 28)
+        before = backend.encoder_slice_seconds
+        self.slice(backend, 0.001)
+        self.assertAlmostEqual(backend.encoder_slice_seconds, .7 * before + .3 * ENCODER_SLICE_BAND[0])
+
+    def test_a_slice_command_with_decoders_does_not_feed_the_slice_time(self):
+        # with prefill_rows set, a slice command takes ready decoders (rows >= INTERLEAVE_MIN_ROWS),
+        # so its time is not one slice.
+        backend = self.backend()
+        backend.prefill_rows, backend.prefill_interleave = 4096, 10
+        backend.active[2].ready = True
+        backend.active[2].job.events = __import__("queue").Queue(maxsize=256)  # room for the passes of one chunk
+        decoders = backend._interleave_decoders(1, 3_600)
+        self.assertEqual(decoders, [2])
+        backend.script += [dict(event="batch_end", op="prefill")]
+        with patch("server.batch_backend.metrics.now", side_effect=[10.0, 10.9]):
+            backend._prefill(1)
+        self.assertEqual(backend.encoder_slice_seconds, 0.076)
+        self.assertEqual(backend.active[1].vision_slices, 28)
+
+    def test_a_failed_slice_does_not_feed_the_slice_time(self):
+        backend = self.backend()
+        original = backend._command
+        def failing(payload, rows=None):
+            result = original(payload, rows)
+            del backend.active[1]  # the engine failed the request (for example a changed image file)
+            return result
+        backend._command = failing
+        backend.script += [dict(event="batch_end", op="prefill")]
+        with patch("server.batch_backend.metrics.now", side_effect=[10.0, 10.1]):
+            backend._prefill(1)
+        self.assertEqual(backend.encoder_slice_seconds, 0.076)
+
+    def test_a_first_image_counts_at_the_default_slice_time_and_rate(self):
+        backend = RestoredRemainingTest().backend()  # prefill_rate 1000.0, as at worker start
+        job = Job(dict(ids=list(range(3_600)), max_tokens=4, stop_ids=[]))
+        backend.active = {1: LiveRequest(job, admitted_at=1.0, slot_context=262144, vision_slices=29)}
+        (item,) = backend._pending_prefills()
+        self.assertEqual(item.remaining, 3_600 + round(29 * 0.076 * 1000.0))  # 2,204 encoder rows
+        from server.batch_scheduler import ENCODER_SLICES_MAX, encoder_rows
+        self.assertEqual(encoder_rows(1 << 20, 0.076, 1000.0), round(ENCODER_SLICES_MAX * 0.076 * 1000.0))
+
+    def test_aging_counts_the_encoder_work(self):
+        # Image turn: 3,600 rows + 29 slices (3,306 rows at 1,500 rows/s), admitted at 0. Text turn: 5,000 rows at 0.1.
+        # Rows only, the image turn ages at 1 + 2 * 3,600 / 1,500 = 5.8 s; with its encoder work at 10.2 s.
+        backend = self.backend()
+        backend.active[1].admitted_at, backend.active[2].admitted_at = 0.0, 0.1
+        self.assertEqual(choose(6.0, [], backend._pending_prefills(), 0, backend.prefill_rate), ("prefill", 2))
+        backend.active[1].vision_slices = 0  # before an earlier change: aged at 6.0, so it went first
+        self.assertEqual(choose(6.0, [], backend._pending_prefills(), 0, backend.prefill_rate), ("prefill", 1))

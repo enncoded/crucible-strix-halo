@@ -234,6 +234,60 @@ int main() {
     pool.SetPinnedLimit(0);
     assert(pool.IdleBytes() == 0 && PinnedCount() == 0);
   }
+  {
+    // a composed snapshot shares the whole chunks of a held snapshot with the same bytes and copies the rest.
+    assert(PinnedCount() == 0);
+    std::vector<uint8_t> a(3 * kChunk + kChunk / 2), b(100);
+    for (size_t i = 0; i < a.size(); ++i) a[i] = uint8_t(i * 7 + 1);
+    for (size_t i = 0; i < b.size(); ++i) b[i] = uint8_t(i * 5 + 3);
+    auto parent = std::make_unique<SnapshotBytes>(a.size());
+    CopySnapshotSpans(std::vector<Span>{{a.data(), a.size()}}, *parent, true);
+    assert(PinnedCount() == 4 && parent->Flat() && parent->HeldElsewhere() == 0);
+    // The device bytes after the parent changed only past the parent's rows (the exactness rule of the caller).
+    a[a.size() - 1] ^= 0xff;
+    std::vector<SnapshotRange> copies;
+    const std::vector<SnapshotBytes::Part> parts{{a.data(), a.size(), parent.get(), 0}, {b.data(), b.size()}};
+    assert(parent->ShareableBytes(0, a.size()) == 3 * kChunk);
+    SnapshotBytes child = SnapshotBytes::Compose(parts, copies);
+    // Chunks 0 to 2 are shared; the last half chunk of `a` and all of `b` go into one new chunk.
+    assert(PinnedCount() == 5 && child.size() == a.size() + b.size());
+    assert(copies.size() == 2 && copies[0].offset == 3 * kChunk && copies[0].bytes == kChunk / 2 &&
+           copies[1].device == b.data() && copies[1].offset == a.size());
+    const int fences_before = fences;
+    CopySnapshotRanges(copies, child, true);
+    assert(fences == fences_before + 1);
+    std::vector<uint8_t> want(a);
+    want.insert(want.end(), b.begin(), b.end());
+    assert(child.Copy() == want);
+    assert(child.HeldElsewhere() == 3 * kChunk && parent->HeldElsewhere() == 3 * kChunk);
+    // A part that starts inside a chunk copies the partial chunks at both ends.
+    std::vector<SnapshotRange> shifted_copies;
+    const SnapshotBytes shifted = SnapshotBytes::Compose({{a.data() + 100, a.size() - 100, parent.get(), 100}},
+                                                         shifted_copies);
+    assert(shifted_copies.size() == 2 && shifted_copies[0].bytes == kChunk - 100 &&
+           shifted_copies[1].offset == 3 * kChunk - 100 && shifted.HeldElsewhere() == 2 * kChunk);
+    CopySnapshotRanges(shifted_copies, shifted, true);
+    assert(shifted.Copy() == std::vector<uint8_t>(a.begin() + 100, a.end()));
+    // A snapshot composed from a composed one shares the same chunks.
+    std::vector<SnapshotRange> again_copies;
+    const SnapshotBytes again = SnapshotBytes::Compose({{want.data(), want.size(), &child, 0}}, again_copies);
+    CopySnapshotRanges(again_copies, again, true);
+    assert(again.Copy() == want && again_copies.size() == 1 && again_copies[0].bytes == kChunk / 2 + b.size());
+    // A restore of a composed snapshot writes its logical bytes; a copy of it is flat and equal.
+    std::vector<uint8_t> restored(want.size(), 0);
+    CopySnapshotSpans(std::vector<Span>{{restored.data(), restored.size()}}, child, false);
+    assert(restored == want);
+    const SnapshotBytes flat = child;
+    assert(flat.Flat() && flat == child);
+    // The parent leaves: the child keeps the shared chunks and its bytes; the parent's last chunk goes.
+    const size_t before = PinnedCount();
+    parent.reset();
+    assert(PinnedCount() == before - 1 && child.Copy() == want && child.HeldElsewhere() == 3 * kChunk);
+    SnapshotBytes shorter = child;
+    shorter.pop_back();
+    assert(shorter.size() == want.size() - 1);
+  }
+  assert(PinnedCount() == 0);
   // Moves transfer chunks without a copy.
   SnapshotBytes first(10);
   const auto* host = first.Chunks().front().host;

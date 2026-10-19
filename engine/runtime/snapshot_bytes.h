@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -201,47 +203,179 @@ class SnapshotChunkPool {
   bool stop_ = false, blocked_ = false, pinning_ = false;
 };
 
-// The bytes of one snapshot, in order across its chunks. Contents start unspecified (no fill): Save writes them all.
+// A pinned chunk that goes back to the pool when its last user goes.
+class PinnedChunk {
+ public:
+  explicit PinnedChunk(SnapshotChunk chunk) : chunk_(chunk) {}
+  PinnedChunk(const PinnedChunk&) = delete;
+  PinnedChunk& operator=(const PinnedChunk&) = delete;
+  ~PinnedChunk() { SnapshotChunkPool::Instance().Give(chunk_); }
+  const SnapshotChunk& Get() const { return chunk_; }
+  static std::shared_ptr<const PinnedChunk> Take() {
+    const SnapshotChunk chunk = SnapshotChunkPool::Instance().Take();
+    try {
+      return std::make_shared<const PinnedChunk>(chunk);
+    } catch (...) {
+      SnapshotChunkPool::Instance().Give(chunk);
+      throw;
+    }
+  }
+ private:
+  SnapshotChunk chunk_;
+};
+
+// A device copy of a snapshot: `bytes` at `device`, to or from the logical offset `offset`.
+struct SnapshotRange { const void* device; size_t bytes, offset; };
+
+// The bytes of one snapshot in logical order, as extents of pinned chunks. Contents start unspecified (no fill):
+// Save writes them all. A flat snapshot (a full save, a disk read) has one extent per chunk. A composed snapshot
+// shares the whole chunks of a held snapshot that has the same bytes, and packs its other bytes into chunks
+// of its own.
 class SnapshotBytes {
  public:
+  // A logical part for Compose: `bytes` at `device`. With `from`, that snapshot holds the same bytes at `from_offset`.
+  struct Part { const void* device = nullptr; size_t bytes = 0; const SnapshotBytes* from = nullptr; size_t from_offset = 0; };
   SnapshotBytes() = default;
-  explicit SnapshotBytes(size_t size) { Resize(size); }
-  SnapshotBytes(const SnapshotBytes& other) {
-    Resize(other.size_);
-    for (size_t index = 0; index < chunks_.size(); ++index)
-      std::memcpy(chunks_[index].host, other.chunks_[index].host, Piece(index));
+  explicit SnapshotBytes(size_t size) {
+    for (size_t at = 0; at < size; at += SnapshotChunkPool::kChunkBytes)
+      Push(PinnedChunk::Take(), 0, std::min(SnapshotChunkPool::kChunkBytes, size - at));
+  }
+  // A copy is deep and flat.
+  SnapshotBytes(const SnapshotBytes& other) : SnapshotBytes(other.size_) {
+    other.ForEachPiece(0, other.size_, [&](const SnapshotChunk& chunk, size_t inside, size_t count, size_t at) {
+      ForEachPiece(at, count, [&](const SnapshotChunk& mine, size_t into, size_t part, size_t done) {
+        std::memcpy(mine.host + into, chunk.host + inside + done, part);
+      });
+    });
   }
   SnapshotBytes& operator=(const SnapshotBytes& other) {
     if (this != &other) *this = SnapshotBytes(other);
     return *this;
   }
   SnapshotBytes(SnapshotBytes&& other) noexcept
-      : chunks_(std::exchange(other.chunks_, {})), size_(std::exchange(other.size_, 0)) {}
+      : extents_(std::exchange(other.extents_, {})), chunks_(std::exchange(other.chunks_, {})),
+        starts_(std::exchange(other.starts_, {})), size_(std::exchange(other.size_, 0)) {}
   SnapshotBytes& operator=(SnapshotBytes&& other) noexcept {
     if (this != &other) {
-      Release();
+      extents_ = std::exchange(other.extents_, {});
       chunks_ = std::exchange(other.chunks_, {});
+      starts_ = std::exchange(other.starts_, {});
       size_ = std::exchange(other.size_, 0);
     }
     return *this;
   }
-  ~SnapshotBytes() { Release(); }
+
+  // Builds a snapshot from `parts` in logical order and appends the device ranges that the caller must copy into it
+  // to `copies`. From a part with `from`, it shares the extents of `from` that use a whole chunk; it copies the rest
+  // of that part, as it copies a part without `from`. So a shared chunk holds only bytes of this snapshot.
+  static SnapshotBytes Compose(const std::vector<Part>& parts, std::vector<SnapshotRange>& copies) {
+    struct Segment { std::shared_ptr<const PinnedChunk> shared; const uint8_t* device; size_t bytes; };
+    std::vector<Segment> plan;
+    size_t own = 0;
+    const auto copy = [&](const void* device, size_t bytes) {
+      if (!bytes) return;
+      auto* at = static_cast<const uint8_t*>(device);
+      if (!plan.empty() && !plan.back().shared && plan.back().device + plan.back().bytes == at)
+        plan.back().bytes += bytes;
+      else
+        plan.push_back({nullptr, at, bytes});
+      own += bytes;
+    };
+    for (const auto& part : parts) {
+      if (!part.from) {
+        copy(part.device, part.bytes);
+        continue;
+      }
+      part.from->ForEachExtent(part.from_offset, part.bytes, [&](const Extent& extent, size_t inside, size_t count,
+                                                                 size_t at) {
+        if (WholeChunk(extent) && inside == 0 && count == extent.bytes)
+          plan.push_back({extent.owner, static_cast<const uint8_t*>(part.device) + at, count});
+        else
+          copy(static_cast<const uint8_t*>(part.device) + at, count);
+      });
+    }
+    std::vector<std::shared_ptr<const PinnedChunk>> fresh;
+    for (size_t at = 0; at < own; at += SnapshotChunkPool::kChunkBytes) fresh.push_back(PinnedChunk::Take());
+    SnapshotBytes out;
+    size_t packed = 0;  // bytes in the fresh chunks so far
+    for (const auto& segment : plan) {
+      if (segment.shared) {
+        out.Push(segment.shared, 0, segment.bytes);
+        continue;
+      }
+      copies.push_back({segment.device, segment.bytes, out.size_});
+      for (size_t done = 0; done < segment.bytes;) {
+        const size_t inside = packed % SnapshotChunkPool::kChunkBytes;
+        const size_t count = std::min(segment.bytes - done, SnapshotChunkPool::kChunkBytes - inside);
+        out.Push(fresh[packed / SnapshotChunkPool::kChunkBytes], inside, count);
+        packed += count;
+        done += count;
+      }
+    }
+    return out;
+  }
 
   size_t size() const { return size_; }
   bool empty() const { return size_ == 0; }
   // Tests shorten a copy to model a corrupt snapshot.
-  void pop_back() { if (size_) --size_; }
+  void pop_back() {
+    if (!size_) return;
+    --size_;
+    if (--extents_.back().bytes == 0) {
+      extents_.pop_back();
+      chunks_.pop_back();
+      starts_.pop_back();
+    }
+  }
+  // One chunk per extent, in logical order. In a flat snapshot, chunk i holds the logical bytes from i x 8 MB.
   const std::vector<SnapshotChunk>& Chunks() const { return chunks_; }
+  bool Flat() const {
+    for (size_t index = 0; index < extents_.size(); ++index)
+      if (extents_[index].inside || starts_[index] != index * SnapshotChunkPool::kChunkBytes) return false;
+    return true;
+  }
   // Calls f(chunk, offset_in_chunk, bytes, offset_in_range) for each chunk piece of [offset, offset + bytes).
   template<class F> void ForEachPiece(size_t offset, size_t bytes, F f) const {
-    if (offset > size_ || bytes > size_ - offset) throw std::out_of_range("snapshot byte range");
-    for (size_t done = 0; done < bytes;) {
-      const size_t at = offset + done;
-      const size_t index = at / SnapshotChunkPool::kChunkBytes, inside = at % SnapshotChunkPool::kChunkBytes;
-      const size_t count = std::min(bytes - done, SnapshotChunkPool::kChunkBytes - inside);
-      f(chunks_[index], inside, count, done);
-      done += count;
+    ForEachExtent(offset, bytes, [&](const Extent& extent, size_t inside, size_t count, size_t at) {
+      f(extent.owner->Get(), extent.inside + inside, count, at);
+    });
+  }
+  // Logical bytes in chunks that another snapshot also uses: an eviction of this snapshot does not free them.
+  size_t HeldElsewhere() const { return size_ - OwnBytes(); }
+  // Logical bytes that an eviction of this snapshot frees: its chunks that no other snapshot uses and that are not in
+  // `kept` (the chunks that a save keeps, ShareableOwners). O(E log E) in the extents.
+  size_t OwnBytes(std::span<const void* const> kept = {}) const {
+    std::vector<const void*> owners;
+    owners.reserve(extents_.size());
+    for (const auto& extent : extents_) owners.push_back(extent.owner.get());
+    std::sort(owners.begin(), owners.end());
+    std::vector<const void*> sorted_kept(kept.begin(), kept.end());
+    std::sort(sorted_kept.begin(), sorted_kept.end());
+    size_t own = 0;
+    for (const auto& extent : extents_) {
+      const void* owner = extent.owner.get();
+      const auto [first, last] = std::equal_range(owners.begin(), owners.end(), owner);
+      if (extent.owner.use_count() > last - first) continue;  // another snapshot holds this chunk too
+      if (std::binary_search(sorted_kept.begin(), sorted_kept.end(), owner)) continue;
+      own += extent.bytes;
     }
+    return own;
+  }
+  // The chunks of [offset, offset + bytes) that a Compose part with this snapshot as `from` shares.
+  std::vector<const void*> ShareableOwners(size_t offset, size_t bytes) const {
+    std::vector<const void*> owners;
+    ForEachExtent(offset, bytes, [&](const Extent& extent, size_t inside, size_t count, size_t) {
+      if (WholeChunk(extent) && inside == 0 && count == extent.bytes) owners.push_back(extent.owner.get());
+    });
+    return owners;
+  }
+  // The bytes of [offset, offset + bytes) that a Compose part with this snapshot as `from` shares.
+  size_t ShareableBytes(size_t offset, size_t bytes) const {
+    size_t shared = 0;
+    ForEachExtent(offset, bytes, [&](const Extent& extent, size_t inside, size_t count, size_t) {
+      if (WholeChunk(extent) && inside == 0 && count == extent.bytes) shared += count;
+    });
+    return shared;
   }
   std::vector<uint8_t> Copy() const {
     std::vector<uint8_t> out(size_);
@@ -250,34 +384,41 @@ class SnapshotBytes {
     });
     return out;
   }
-  bool operator==(const SnapshotBytes& other) const {
-    if (size_ != other.size_) return false;
-    for (size_t index = 0; index < chunks_.size(); ++index)
-      if (std::memcmp(chunks_[index].host, other.chunks_[index].host, Piece(index)) != 0) return false;
-    return true;
-  }
+  bool operator==(const SnapshotBytes& other) const { return size_ == other.size_ && Copy() == other.Copy(); }
 
  private:
-  size_t Piece(size_t index) const {
-    return std::min(SnapshotChunkPool::kChunkBytes, size_ - index * SnapshotChunkPool::kChunkBytes);
+  struct Extent { std::shared_ptr<const PinnedChunk> owner; size_t inside, bytes; };
+  static bool WholeChunk(const Extent& extent) {
+    return extent.inside == 0 && extent.bytes == SnapshotChunkPool::kChunkBytes;
   }
-  void Resize(size_t size) {
-    const size_t count = (size + SnapshotChunkPool::kChunkBytes - 1) / SnapshotChunkPool::kChunkBytes;
-    chunks_.reserve(count);
-    try {
-      while (chunks_.size() < count) chunks_.push_back(SnapshotChunkPool::Instance().Take());
-    } catch (...) {
-      Release();
-      throw;
+  // Calls f(extent, offset_in_extent, bytes, offset_in_range) for each extent piece of [offset, offset + bytes).
+  template<class F> void ForEachExtent(size_t offset, size_t bytes, F f) const {
+    if (offset > size_ || bytes > size_ - offset) throw std::out_of_range("snapshot byte range");
+    if (!bytes) return;
+    size_t index = size_t(std::upper_bound(starts_.begin(), starts_.end(), offset) - starts_.begin()) - 1;
+    for (size_t done = 0; done < bytes; ++index) {
+      const Extent& extent = extents_[index];
+      const size_t inside = offset + done - starts_[index];
+      const size_t count = std::min(bytes - done, extent.bytes - inside);
+      f(extent, inside, count, done);
+      done += count;
     }
-    size_ = size;
   }
-  void Release() {
-    for (const auto& chunk : chunks_) SnapshotChunkPool::Instance().Give(chunk);
-    chunks_.clear();
-    size_ = 0;
+  // Appends an extent; one that continues the last extent in the same chunk joins it.
+  void Push(std::shared_ptr<const PinnedChunk> owner, size_t inside, size_t bytes) {
+    if (!extents_.empty() && extents_.back().owner == owner &&
+        extents_.back().inside + extents_.back().bytes == inside) {
+      extents_.back().bytes += bytes;
+    } else {
+      chunks_.push_back(owner->Get());
+      starts_.push_back(size_);
+      extents_.push_back({std::move(owner), inside, bytes});
+    }
+    size_ += bytes;
   }
-  std::vector<SnapshotChunk> chunks_;
+  std::vector<Extent> extents_;
+  std::vector<SnapshotChunk> chunks_;  // extents_[i].owner->Get()
+  std::vector<size_t> starts_;         // the logical offset of extents_[i]
   size_t size_ = 0;
 };
 
@@ -298,22 +439,17 @@ __global__ void SnapshotCopyKernel(const SnapshotPiece* pieces, int first) {
   }
 }
 #endif
-// Copies the spans, in order, to (save) or from (restore) the snapshot chunks and waits for the copy. One kernel on
-// the null stream moves every piece: on gfx1151 it reached 86 GB/s where one hipMemcpy per span reached 58 GB/s
-// (bench/snapshot_copy_bench.hip). Null-stream order matches the hipMemcpy calls it replaces.
-template<class Span>
-void CopySnapshotSpans(const std::vector<Span>& spans, const SnapshotBytes& bytes, bool to_host) {
+// Copies each range to (save) or from (restore) its logical bytes in the snapshot chunks and waits for the copy. One
+// kernel on the null stream moves every piece: on gfx1151 it reached 86 GB/s where one hipMemcpy per span reached
+// 58 GB/s (bench/snapshot_copy_bench.hip). Null-stream order matches the hipMemcpy calls it replaces.
+inline void CopySnapshotRanges(const std::vector<SnapshotRange>& ranges, const SnapshotBytes& bytes, bool to_host) {
   std::vector<SnapshotPiece> pieces;
-  size_t offset = 0;
-  for (const auto& span : spans) {
-    bytes.ForEachPiece(offset, span.bytes, [&](const SnapshotChunk& chunk, size_t inside, size_t count, size_t at) {
-      auto* device = static_cast<uint8_t*>(const_cast<void*>(span.pointer)) + at;
+  for (const auto& range : ranges)
+    bytes.ForEachPiece(range.offset, range.bytes, [&](const SnapshotChunk& chunk, size_t inside, size_t count, size_t at) {
+      auto* device = static_cast<uint8_t*>(const_cast<void*>(range.device)) + at;
       if (to_host) pieces.push_back({device, chunk.device + inside, count});
       else pieces.push_back({chunk.device + inside, device, count});
     });
-    offset += span.bytes;
-  }
-  if (offset != bytes.size()) throw std::logic_error("snapshot spans do not cover the snapshot bytes");
 #ifdef __HIPCC__
   // The piece table lives in pinned memory that the kernel reads; the wait below frees it for the next copy.
   static std::mutex mutex;
@@ -344,5 +480,17 @@ void CopySnapshotSpans(const std::vector<Span>& spans, const SnapshotBytes& byte
     HIP_OK(hipMemcpy(piece.dst, piece.src, piece.bytes, to_host ? hipMemcpyDeviceToHost : hipMemcpyHostToDevice));
 #endif
   HIP_OK(hipStreamSynchronize(0));
+}
+// Copies the spans, in order, to (save) or from (restore) the whole snapshot.
+template<class Span>
+void CopySnapshotSpans(const std::vector<Span>& spans, const SnapshotBytes& bytes, bool to_host) {
+  std::vector<SnapshotRange> ranges;
+  size_t offset = 0;
+  for (const auto& span : spans) {
+    ranges.push_back({span.pointer, span.bytes, offset});
+    offset += span.bytes;
+  }
+  if (offset != bytes.size()) throw std::logic_error("snapshot spans do not cover the snapshot bytes");
+  CopySnapshotRanges(ranges, bytes, to_host);
 }
 }  // namespace crucible

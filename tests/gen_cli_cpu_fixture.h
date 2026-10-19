@@ -41,7 +41,7 @@ double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::n
 std::vector<int> ParseIds(const std::string& text) { return ParseDraftSelection(text); }
 
 struct Engine {
-  int ctx, prefill_rows, mtp_calls = 0;
+  int ctx, prefill_rows, mtp_calls = 0, last_prefill_rows = 0;
   std::vector<int> history;
   std::vector<float> hidden = std::vector<float>(64 * kWide);
   std::vector<float> snapshots = std::vector<float>(64 * kWide);
@@ -90,7 +90,13 @@ struct Engine {
     assert(retained.Forward(rows, 0, rows).empty());
     touched = true;
     history.insert(history.end(), tokens, tokens + rows);
+    last_prefill_rows = rows;
     return {0};
+  }
+  // The real engine keeps bulk stacks in its padded buffer; this fake keeps them in hidden.
+  void CopyPrefillStacks(float* dst, int first, int rows) {
+    assert(first >= 0 && rows >= 1 && first + rows <= last_prefill_rows && first + rows <= 64);
+    std::memmove(dst, hidden.data() + size_t(first) * kWide, size_t(rows) * kWide * sizeof(float));
   }
   std::vector<int> Mtp(const float*, const int*, int rows, int pos, bool = true, bool = false) {
     assert(ContextRowsFit(pos, rows, ctx, kMaxRows));

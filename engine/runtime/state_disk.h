@@ -787,10 +787,17 @@ class StateDisk {
   }
   static bool StateFileName(const std::string& name) {
     return name.size() > 6 && (name.ends_with(".state") || name.find(".state.tmp.") != std::string::npos ||
-                               name.find(".state.dead.") != std::string::npos);
+                               name.find(".state.dead.") != std::string::npos || BlockFileName(name));
+  }
+  // The block files of the block storage format. This binary never writes them,
+  // but a rollback to it must remove a newer binary's directory in full: else up to the whole disk budget stays
+  // on the disk with no budget control.
+  static bool BlockFileName(const std::string& name) {
+    return name.size() > 6 && (name.ends_with(".block") || name.find(".block.tmp.") != std::string::npos ||
+                               name.find(".block.dead.") != std::string::npos);
   }
   // Directories of other identities (another binary, checkpoint or setting) leave at start, unless a live engine
-  // holds their lock. Only state files, temporary files and the lock are removed; anything else stays.
+  // holds their lock. Only state and block files, temporary files and the lock are removed; anything else stays.
   size_t RemoveOtherIdentities() {
     size_t removed = 0;
     std::error_code error;
@@ -980,7 +987,8 @@ class StateDisk {
   std::string Write(const Job& job) {
     const double start = Now();
     const Snapshot& snapshot = *job.snapshot;
-    const size_t chunks = snapshot.bytes.Chunks().size();
+    // File blocks of 8 MB in logical order: a composed snapshot writes the same file as its flat copy.
+    const size_t chunks = (snapshot.bytes.size() + SnapshotChunkPool::kChunkBytes - 1) / SnapshotChunkPool::kChunkBytes;
     const uint64_t header_bytes = BuildStateHeader(options_.identity, job.meta, snapshot,
                                                    std::vector<uint64_t>(chunks)).size();
     const uint64_t file_bytes = header_bytes + StateRoundUp(job.meta.payload);
@@ -1016,13 +1024,15 @@ class StateDisk {
     std::string failed = StateParallel(chunks, options_.io_threads, [&](size_t index, StateBounce& bounce) -> std::string {
       if (options_.before_chunk) options_.before_chunk();
       if (stopping_) return "stopped";
-      const SnapshotChunk& chunk = snapshot.bytes.Chunks()[index];
       const size_t length = std::min(SnapshotChunkPool::kChunkBytes, size_t(job.meta.payload) - index * SnapshotChunkPool::kChunkBytes);
       // Every chunk goes through the bounce buffer: direct I/O from the pinned chunk pages fails with EFAULT on the test machine
       // (Oct 9: every spill was refused). The padding is zero: the file never holds bytes of another state.
       const size_t padded = StateRoundUp(length);
       uint8_t* source = bounce.Get();
-      std::memcpy(source, chunk.host, length);
+      snapshot.bytes.ForEachPiece(index * SnapshotChunkPool::kChunkBytes, length,
+                                  [&](const SnapshotChunk& chunk, size_t inside, size_t count, size_t at) {
+        std::memcpy(source + at, chunk.host + inside, count);
+      });
       std::memset(source + length, 0, padded - length);
       // On the bounce buffer: the pinned chunk is read once (by the copy). The bytes are the same.
       sums[index] = StateChecksum(source, length);

@@ -30,6 +30,8 @@ struct ServeRequest : DecodePolicy {
   sampling::Options sampling;
   // Only `serve --vision 1` accepts images (docs: server/README.md).
   std::vector<ImageInput> images;
+  // 1: the done event adds per-token draft counters (serve --draft-stats).
+  int draft_detail = 0;
 };
 // The conversation-cache key of `tokens` (the request's prompt, a prefix of it, or its generated tail). Two images
 // have the same pad token IDs, so image tokens key by image digest (CacheKey); text keys equal the token IDs.
@@ -75,6 +77,10 @@ inline ServeRequest ParseServeRequest(const std::string& line, int ctx, const De
     else if (key == "lookup") request.lookup = RequestInt(scanner);
     else if (key == "lookup_min") request.lookup_min = RequestInt(scanner);
     else if (key == "draft_value") request.draft_value = RequestInt(scanner);
+    else if (key == "draft_detail") {
+      request.draft_detail = RequestInt(scanner);
+      if (request.draft_detail < 0 || request.draft_detail > 1) throw std::runtime_error("draft_detail must be 0 or 1");
+    }
     else if (key == "stop_ids") request.stop_ids = RequestIds(scanner);
     else if (key == "cache_control") request.cache_control = scanner.Str();
     else if (key == "cache_tail") request.cache_tail = scanner.Str();

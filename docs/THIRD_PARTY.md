@@ -1,6 +1,6 @@
 # Third-party software and models
 
-The engine uses the Apache-2.0 license. See the root `LICENSE`.
+The engine license is Apache-2.0 ([LICENSE](../LICENSE), [NOTICE](../NOTICE)).
 Dependency licenses and model licenses remain separate.
 This inventory is not legal advice or a complete source-origin audit.
 
@@ -14,8 +14,8 @@ They do not download that clone during CPU CI.
 
 No separate vendored library tree was found in the inspected Crucible source.
 This does not establish that every implementation fragment is independently authored.
-Review source origins before selecting the project license or distributing binaries.
-Preserve this upstream notice for any copied or substantially adapted ExLlamaV3 material:
+Review source origins before distributing binaries.
+Preserve this upstream notice for any copied or substantially adapted ExLlamaV3 material. [NOTICE](../NOTICE) keeps it:
 
 ```text
 MIT License

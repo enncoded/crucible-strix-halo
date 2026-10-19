@@ -138,7 +138,14 @@ The server protects itself against a bad client:
 - `stream_options.include_usage`: include the final SSE usage event.
 - `spec`: draft depth from `0` through `7`, default `7`; `0` selects serial decode.
 - `draft_q`: the draft confidence limit from `0` through `1`, default `0.3`; `0` disables it.
-- `draft_head`: `64k` by default; use `full` for the full vocabulary.
+- `draft_head`: `64k` by default; use `full` for the full vocabulary. In batched serve, the server flag
+  `--draft-blocks FILE` (an absolute path) replaces the built-in 64K blocks for every request: a regular file of
+  1 to 65536 bytes with sorted unique 128-token block IDs in `[0, 1940)`, comma-separated. The head changes only
+  the drafts, not the output IDs. Memory: the head is a device copy of its blocks, one 128-row block per
+  ID: 0.205 MB per block with the 5-bit head of the 3.05 pack, 0.246 MB with the 6-bit head of the 4.05 pack. The
+  built-in 512 blocks take 105.0 MB or 126.0 MB; every block above 512 takes the same amount from the serve
+  headroom (the full 1940 blocks: 397.8 MB or 477.3 MB, so 292.8 MB or 351.3 MB more). The engine prints
+  `serve draft head: N blocks from --draft-blocks, X MB (the built-in head: 512 blocks, Y MB)` at startup.
 - `mtp_prefix`: auxiliary warmup limit from `0` through `262144`; `0` warms the full prompt. The default comes from
   the server flag `--mtp-window N` (default `256`). Batched serve accepts `0` too. At an equal restore point, the
   window changes only the drafts, not the output IDs. In batched serve, the server window also sets the MTP
@@ -156,7 +163,10 @@ The server protects itself against a bad client:
   exact value turns it on, and it needs the user's explicit approval. `--draft-capture-max-gib N` (tokens mode
   only) limits the spool. DIR must be the server user's own directory, closed to group and other, and not a
   symlink; one server at a time writes it (`DIR/.lock`); file times are set to 00:00 UTC of the day. A capture
-  fault never fails a request.
+  fault never fails a request. `--draft-stats` (batch mode, counts mode only, default off) also writes
+  `DIR/draft-stats-YYYY-MM-DD.json`: per turn class, counts of draft tokens by position and by token ID, and of
+  rejected target token IDs. Counts only. Run the server and the engine from the same commit: an older engine
+  rejects the `draft_detail` request field.
   Export floor: the per-day files never leave the serving machine. Any export sums 7 or more days and drops each class with
   fewer than 20 sequences.
 - `draft_adapt`: optional `0` or `1`; the default adapts the built-in 64K head.

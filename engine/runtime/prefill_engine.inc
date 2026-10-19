@@ -73,9 +73,7 @@ void Engine::InitPrefill() {
   pf_gdn_.lower=Scratch<float>(matrices); pf_gdn_.qk=Scratch<float>(matrices);
   pf_ab_=Scratch<float>(pf_launch_rows_*96);
   pf_prompt_stacks_=Scratch<float>((size_t)prefill_rows_*kWide);
-  const char* pad_h=crucible::SwitchText("CRUCIBLE_PF_PAD_H");
-  // Padding avoids cache conflicts. Explicit zero keeps tight storage for A/B checks.
-  if (!pad_h || std::string(pad_h)=="1") {
+  if (pf_pad_h_) {
     pf_hstride_=kWide+64;
     pf_H_=Scratch<float>((size_t)pf_launch_rows_*pf_hstride_);
   }
@@ -387,14 +385,10 @@ std::vector<int> Engine::Prefill(const int* tokens, int R, const std::string& du
                sequence_=prefilling; profile_scope_=scope;
              }
            });
-  if (bulk_H!=H_ && !prune) {
-    // The head and every public stack reader use the original tight layout.
-    HIP_OK(hipMemcpy2DAsync(H_,kWide*sizeof(float),bulk_H,ldh*sizeof(float),
-                            kWide*sizeof(float),R,hipMemcpyDeviceToDevice,0));
-    Mark("h_pack");
-  }
+  // The stacks stay in bulk_H: the head reads its row there, and readers copy rows with CopyPrefillStacks (T2).
+  last_prefill_rows_=R;
   if (!predict) { Collect(); HIP_OK(hipDeviceSynchronize()); CheckChunk(pos0,R,false); return {}; }
-  HcReadR<1>(m_.final_hc,false,R-1);
+  HcReadR<1>(m_.final_hc,false,R-1,bulk_H+(size_t)(R-1)*ldh);
   if (R>1) HIP_OK(hipMemcpyAsync(x_,x_+(size_t)(R-1)*kHidden,kHidden*sizeof(float),hipMemcpyDeviceToDevice,0));
   Mark("hc_mix"); RunGroup(pf_head_,true,true);
   ArgmaxKernel<<<1,1024>>>(logits_,kVocab,ids_); Mark("head"); Collect();
@@ -485,11 +479,12 @@ bool Engine::MtpWarm(const float* first, const float* rows, const int* tokens, i
   return true;
 }
 
-// Check mode: the chunk's trunk stacks (H_ after the pack) and its final logits row, keyed by the full prefix.
+// Check mode: the chunk's trunk stacks (tight rows) and its final logits row, keyed by the full prefix.
 void Engine::CheckChunk(int pos0, int R, bool predict) {
   if (!interleave_check_) return;
   std::vector<float> host((size_t)R*kWide);
-  HIP_OK(hipMemcpy(host.data(),H_,host.size()*sizeof(float),hipMemcpyDeviceToHost));
+  HIP_OK(hipMemcpy(host.data(),TightRows(PrefillH(R),PrefillHStride(R),R),host.size()*sizeof(float),
+                   hipMemcpyDeviceToHost));
   uint64_t logits=0;
   if (predict) {
     std::vector<float> row(kVocab);

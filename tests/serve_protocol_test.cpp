@@ -20,6 +20,9 @@ int main() {
   assert(ParseServeRequest(R"({"ids":[1,2],"max_tokens":1,"cache_tail":"guard"})", 32).cache_tail == "guard");
   assert(ParseServeRequest(R"({"ids":[1,2],"max_tokens":1})", 32).cache_tail == "auto");
   Rejected(R"({"ids":[1],"cache_tail":"keep"})", "cache_tail");
+  assert(ParseServeRequest(R"({"ids":[1,2],"max_tokens":1,"draft_detail":1})", 32).draft_detail == 1);
+  assert(ParseServeRequest(R"({"ids":[1,2],"max_tokens":1})", 32).draft_detail == 0);
+  Rejected(R"({"ids":[1],"draft_detail":2})", "draft_detail");
   Rejected(R"({"ids":[1],"cache_prefix_tokens":2})", "cache_prefix_tokens");
   Rejected(R"({"ids":[1],"cache_prefix_tokens":-1})", "cache_prefix_tokens");
   assert(ParseServeRequest(R"({"ids":[1,2],"max_tokens":1,"shared_prefix_tokens":2})", 32).shared_prefix_tokens == 2);

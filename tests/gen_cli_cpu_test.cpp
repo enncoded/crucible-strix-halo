@@ -2,6 +2,9 @@
 #include "gen_cli_cpu_fixture.h"
 #include "gen_cli_cpu.h"
 
+// The prefill 16 and 64 cases must run the bulk path of RunPrompt, not the Forward fallback.
+static_assert(HasGemmPrefill<Engine>);
+
 int main() {
   for (double temperature : {0., 0.7}) for (int prefill : {0, 16, 64})
     for (int prompt : {1, 24, 65, 257, 3000}) for (int cap : {0, 8, 256}) {

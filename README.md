@@ -4,10 +4,10 @@ An inference engine for EXL3 checkpoints of Qwen3.8-Flash-Next on one AMD Strix 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/crucible-hero-dark.png">
-  <img src="docs/assets/crucible-hero-light.png" alt="A chart of the decode speed of one session against the context length. On code, decode holds steady at 77 to 80 tok/s from 1K to 196K. On prose, decode is 60 to 67 tok/s. The first token of a cold 128K prompt comes after 83.1 s. The first token of a follow-up turn comes after 0.34 s. The table under the image gives the date of each value and marks the values of older builds.">
+  <img src="docs/assets/crucible-hero-light.png" alt="A chart of the decode speed of one session of Crucible with the 3.05 bpw pack against the context length, the median of 8 or 9 runs from Oct 18 to 19, 2026. On code, one session decodes at 71 to 75 tok/s from 4K to 100K. On prose, it decodes at 55 to 58 tok/s. The first token of a cold 130K prompt comes after 80.6 s. When 4K new tokens follow the cached 130K prompt, the first token comes after 4.87 s. The table under the image gives each value.">
 </picture>
 
-Crucible runs **EXL3** checkpoints of **Qwen3.8-Flash-Next** (**Qwen 3.8 Flash Next**) on **AMD Strix Halo**:
+Crucible runs **EXL3** checkpoints of **Qwen3.8-Flash-Next** on **AMD Strix Halo**:
 one **Ryzen AI Max+ 395** with a **Radeon 8060S** (**gfx1151**) and 128 GB of unified memory. It uses its own
 **ROCm/HIP** kernels in C++20. It does not use another engine for inference. A local OpenAI-compatible server
 gives chat, streamed responses, function calls, and exact speculative decoding. This is research software for
@@ -18,37 +18,64 @@ one GPU architecture, not a general model backend or a production service.
 
 ## What it is like to use
 
-The table shows one session on the 3.05 bpw pack, which is the pack for daily use. Speculative
-decoding (MTP) is on, as in daily use. A cold prompt has no part in the cache.
+The first table shows one session on the 3.05 bpw pack. It decodes faster with a smaller model
+file. The second table shows the 4.05 bpw pack: one session
+decodes at 57.6 tok/s at 32K, the cold prefill at 32K gives 1,561 tok/s,
+and four sessions reach 109 tok/s in total. Its next-token accuracy is 0.0038 higher
+(p 0.12, not significant at 0.05), and the published KL divergence from BF16 is 0.0067 against 0.0177 ([Quality](#quality)).
+Speculative decoding (MTP) is on, as in daily use. A cold prompt has no part in the cache. The server
+ran with four sessions and image input on, as in daily use.
+
+**3.05 bpw pack (the faster option)**
 
 | Context | First token, cold prompt | Prefill | Decode, code | Decode, prose |
 |---|---:|---:|---:|---:|
-| 4K | 2.88 s ¹ | 1,443 tok/s ¹ | 77 tok/s ² | 67 tok/s ² |
-| 32K | 20.5 s | 1,604 tok/s | 79 tok/s | 64 tok/s |
-| 64K | 41.1 s | 1,602 tok/s | 78 tok/s | 65 tok/s |
-| 128K | 83.1 s ³ | 1,565 tok/s ³ | 78 tok/s | 60 tok/s |
-| 196K | not measured | not measured | 80 tok/s ⁴ | not measured |
+| 4K | not measured | not measured | 71 tok/s | 56 tok/s |
+| 32K | 20.1 s | 1,638 tok/s | 72 tok/s | 58 tok/s |
+| 100K | not measured | not measured | 75 tok/s | 55 tok/s |
+| 130K | 80.6 s ¹ | 1,613 tok/s ¹ | not measured | not measured |
 
-Without a mark: first token and prefill come from the same-harness run of Oct 13 to 14, as the median of the cold requests. Decode comes from one session on Oct 13. Both use the release build of Oct 13.\
-¹ Measured on Oct 7 with an older build (Oct 6), in the same harness. The 4K requests start at the idle GPU clock.\
-² Decode at 1K context.\
-³ A prompt of about 130,000 tokens.\
-⁴ Measured on Oct 11 with an older build, code only. No cold run used this length.
+All values are the median of 9 runs (Oct 18 to 19, 2026), 8 for the 100K decode cells, with the same engine binary and prompts as the 4.05 runs. A run that did not measure a row does not count for that row. First token and prefill: the median of two cold requests in each run. Decode: one session, from the first to the last token of the code turn and of the prose turn. "not measured": those runs did not measure this cell.\
+¹ A prompt of 130,079 tokens.
 
-**Four sessions at once:** 130 tok/s in total at 32K and 124 tok/s at 128K on
-code, 115 tok/s and 111 tok/s on prose (Oct 13). Eight sessions gave
+**4.05 bpw pack (the higher-quality option)**
+
+| Context | First token, cold prompt | Prefill | Decode, code | Decode, prose |
+|---|---:|---:|---:|---:|
+| 4K | not measured | not measured | 65 tok/s | 53 tok/s |
+| 32K | 21.0 s | 1,561 tok/s | 58 tok/s | 50 tok/s |
+| 100K | not measured | not measured | 58 tok/s | 50 tok/s |
+| 130K | 83.9 s ¹ | 1,550 tok/s ¹ | not measured | not measured |
+
+All values are the median of 5 runs (Oct 17 to 19, 2026) with the build of this source. A run that did not measure a row does not count for that row. First token and prefill: the median of two cold requests in each run. Decode: one session, from the first to the last token of the code turn and of the prose turn. "not measured": those runs did not measure this cell.\
+¹ A prompt of 130,080 tokens.
+
+**Four sessions at once:** 132 tok/s in total at 32K and 119 tok/s at 100K on
+code, 106 tok/s and 102 tok/s on prose (median of 8 or 9 runs). Each session has its own
+prompt start, as agents have. At 32K, each session decodes at 28 tok/s.
+
+**Four sessions with one shared prompt start (the cost case):** all four sessions start with the same new 32K
+prompt at the same time. The total is 128 tok/s at 32K, but each session decodes at only
+13 tok/s (median). The sessions get their first token after 1.7 s to
+65.9 s, because one slot holds the prompt start and each other session prefills it
+again (median of 9 runs).
+
+**A follow-up turn in a cached conversation:** when 4K new tokens follow a cached prompt, the first token comes
+after 3.13 s at 32K and 4.87 s at 130K. An identical re-send gives the first token
+after 0.21 s at 32K and 2.18 s at 130K (median of 9 runs). In real turns with an older build
+and the 3.05 bpw pack (Oct 13 to 15), the median first token came after 0.34 s for up to 300 new
+tokens, 0.50 s for 300 to 1,000, 1.14 s for 1,000 to 3,000, and
+2.22 s for 3,000 to 10,000 new tokens. Eight sessions of that older build gave
 148 tok/s in total at 32K (Oct 12).
 
-**A follow-up turn in a cached conversation:** the first token comes after 0.34 s for up to 300
-new tokens, 0.50 s for 300 to 1,000, 1.14 s for 1,000 to 3,000, and
-2.22 s for 3,000 to 10,000 new tokens (medians of real turns, Oct 13 to 15).
-
-- **The cache makes later turns fast.** A later turn pays only for its new tokens: about
-  0.19 s plus about 1 ms for each new token. A long context costs its
-  cold prefill only once. An optional disk tier restored a conversation of 87,867 tokens in
-  0.55 s (Oct 15).
-- **Decode stays almost flat with context.** One session decodes at 77 to 80 tok/s on code from 1K to
-  196K. The draft head predicts code better than prose, so prose decodes at 60 to 67 tok/s.
+- **The cache makes later turns fast.** A later turn pays only for its new tokens. In the real turns of the
+  older build, that cost was about 0.19 s plus about 1 ms for each new
+  token. A long context costs its cold prefill only once. An optional disk tier restored a conversation of
+  87,867 tokens in 0.55 s (Oct 15, an older build).
+- **Decode changes little with context.** One session on the 3.05 pack decodes at 71 to 75 tok/s on
+  code from 4K to 100K, and one session on the 4.05 pack decodes at 58 to 65 tok/s. The rate
+  changes little from 32K to 100K. The draft head predicts code better than prose, so prose decodes at
+  55 to 58 tok/s on the 3.05 pack and 50 to 53 tok/s on the 4.05 pack.
 - **The output is exact.** Speculative decoding changes the speed, not the tokens. Each speed change must pass
   bitwise-equal gates before it merges.
 - **Real use.** On one day of agent work (Oct 12, 2,890 turns, an older build), the median time to
@@ -57,39 +84,181 @@ new tokens, 0.50 s for 300 to 1,000, 1.14 s for 1,000 to 3,000, and
 
 How each value was measured: [measurement details](#measurement-details).
 
-**These numbers are provisional.** They come from the development records up to 2026-10-15, not from a release
-run. A release run on 2026-10-18 replaces them. Each value names its date. A value is not a measurement of a
-later build.
+**Repeat runs.** The tables and the image come from repeat runs on Oct 18 to 19, 2026 (3.05 pack) and on
+Oct 17 to 19, 2026 (4.05 pack). Each Crucible value is the median of its runs. Values from an earlier run or
+an older build name their date and their build.
 
 ## Same-harness comparison with Halogen and Gufo
 
-| Engine | Version | Date | Cold 32K prefill | Cold 130K prefill | Decode after a 32K prompt |
-|---|---|---|---:|---:|---:|
-| Crucible | release build of 2026-10-13 (3.05 bits per weight) | 2026-10-13 | 20.5 s | 83.1 s | not measured in this run |
-| Halogen | 0.16.2 | 2026-10-13 | 18.1 s | 73.3 s | not measured in this run |
-| Crucible | development build of 2026-10-08 (3.05 bits per weight) | 2026-10-10 | 22.4 s | 88.3 s | 79 to 80 tok/s |
-| Halogen | 0.16.2 | 2026-10-10 | 18.6 s | 75.0 s | 53 to 55 tok/s |
-| Crucible | development build of 2026-10-06 (3.05 bits per weight) | 2026-10-07 | 22.4 s | 94.8 s | not measured in this run |
-| Halogen | 0.16.2 | 2026-10-07 | 18.2 s | 74.0 s | not measured in this run |
-| Gufo | 0.9.0 (GGUF UD-Q4_K_XL, MTP on) | 2026-10-07 | 23.8 s | 97.7 s | not measured in this run |
+Crucible values are the median of repeat runs: 5 runs for the 4.05 pack (Oct 17 to 19, 2026) and 9 runs for
+the 3.05 pack (Oct 18 to 19, 2026). Halogen 0.16.2 and Gufo 0.9.0 (MTP) ran once, on Oct 17, 2026. All
+columns ran on one machine with one request client, one engine at a time. The 3.05 column used the same
+engine binary and prompts as the 4.05 column. The Quality section shows the quality difference of each
+engine and weight format.
+
+Engines: Crucible 4.05 (4.05 bpw EXL3, median of 5 runs (Oct 17 to 19, 2026), build of this source, 4 sessions); Crucible 3.05 (3.05 bpw EXL3, median of 9 runs (Oct 18 to 19, 2026), same engine binary and prompts, 4 sessions, conversation cache 25,600 MiB against 9,700 MiB); Halogen (0.16.2, one run (Oct 17, 2026), 4 sessions); Gufo (0.9.0, one run (Oct 17, 2026), GGUF UD-Q4_K_XL, MTP).
+
+**Prefill and first token.** Time to the first token of one request with 4 output tokens, the median of the runs. A re-send repeats the last cold prompt. An extension adds about 4K tokens of other source to it.
+
+| | Crucible 4.05 | Crucible 3.05 | Halogen | Gufo |
+|---|---:|---:|---:|---:|
+| Cold 32K prompt | 21.04 s (1561 tok/s) | 20.06 s (1638 tok/s) | 18.08 s (1817 tok/s) | 24.19 s (1358 tok/s) |
+| Re-send of the 32K prompt | 0.25 s (32768 of 32846 cached) | 0.21 s (32768 of 32847 cached) | 0.04 s (32845 of 32845 cached) | 0.02 s (32845 of 32845 cached) |
+| 32K prompt + 4K new tokens | 3.31 s (32768 of 36625 cached) | 3.13 s (32768 of 36626 cached) | 2.65 s (32832 of 36624 cached) | 8.87 s (24576 of 36624 cached) |
+| Cold 130K prompt | 83.90 s (1550 tok/s) | 80.63 s (1613 tok/s) | 73.50 s (1770 tok/s) | 98.39 s (1322 tok/s) |
+| Re-send of the 130K prompt | 2.32 s (126976 of 130079 cached) | 2.18 s (126976 of 130080 cached) | 0.18 s (130079 of 130079 cached) | 0.05 s (130081 of 130081 cached) |
+| 130K prompt + 4K new tokens | 5.15 s (126976 of 133858 cached) | 4.87 s (126976 of 133859 cached) | 3.06 s (130048 of 133858 cached) | 4.40 s (129024 of 133860 cached) |
+
+**Decode, code turn.** Tokens per second: each session (median) / total while all sessions decode. Each session has its own prompt start, as agents have. The cost row is the case where all four sessions share one new long prompt start.
+
+| | Crucible 4.05 | Crucible 3.05 | Halogen | Gufo |
+|---|---:|---:|---:|---:|
+| 4K context, 1 session | 64.9 / 64.9 | 70.7 / 70.7 | 57.2 / 57.2 | 34.8 / 34.8 |
+| 4K context, 4 sessions | 25.6 / 109.0 | 29.0 / 128.2 | 19.7 / 78.5 | 19.1 / 77.3 |
+| 32K context, 1 session | 57.6 / 57.6 | 72.0 / 72.0 | 54.8 / 54.8 | 35.8 / 35.8 |
+| 32K context, 4 sessions | 24.1 / 109.0 | 28.5 / 131.8 | 19.5 / 78.9 | 16.9 / 66.7 |
+| 32K context, 4 sessions, one shared prompt start (cost row) | 11.4 / 105.5; first token of each session: 1.9, 69.4, 23.9, 46.5 s | 12.7 / 128.4; first token of each session: 65.9, 1.7, 22.7, 44.3 s | 19.4 / 77.4; first token of each session: 0.34, 0.29, 0.23, 0.39 s (Oct 18) | 17.5 / 69.5; first token of each session: 0.04, 0.04, 0.04, 0.04 s (Oct 18) |
+| 100K context, 1 session | 57.6 / 57.6 | 75.3 / 75.3 | 55.0 / 55.0 | 36.7 / 36.7 |
+| 100K context, 4 sessions | 22.4 / 96.9 | 27.0 / 119.5 | 6.1 / 76.1 | not run |
+
+**Decode, mean of four turns.** Tokens per second of each session: the mean of the code, sampled code, thinking and prose turns.
+
+| | Crucible 4.05 | Crucible 3.05 | Halogen | Gufo |
+|---|---:|---:|---:|---:|
+| 4K context, 1 session | 61.4 | 66.3 | 50.8 | 35.3 |
+| 4K context, 4 sessions | 25.1 | 29.4 | 19.7 | 17.7 |
+| 32K context, 1 session | 57.5 | 63.9 | 50.4 | 37.2 |
+| 32K context, 4 sessions | 24.1 | 28.3 | 19.0 | 16.7 |
+| 100K context, 1 session | 56.2 | 67.6 | 50.7 | 35.6 |
+| 100K context, 4 sessions | 22.0 | 26.3 | 10.9 | not run |
+
+**Other.**
+
+| | Crucible 4.05 | Crucible 3.05 | Halogen | Gufo |
+|---|---:|---:|---:|---:|
+| 4 sessions extend a 32K prompt: tokens / wall time | 2048 / 28.9 s = 70.8 tok/s | 2048 / 25.7 s = 79.6 tok/s | 2048 / 35.7 s = 57.4 tok/s | 2048 / 69.2 s = 29.6 tok/s |
+| 4 sessions extend a 32K prompt: first token of the extension | 7.64 s | 7.17 s | 6.61 s | 40.18 s |
+| First token after one 896 x 896 image | 0.93 s (846 prompt tokens) | 0.86 s (846 prompt tokens) | 1.45 s (846 prompt tokens) | not run |
+| Mean GPU clock / package power while busy | 2454 MHz / 97.4 W | 2406 MHz / 98.0 W | 2498 MHz / 98.3 W | 2481 MHz / 96.8 W |
 
 **Thank you to the authors of Halogen and of Gufo.** Their engines run on the same hardware with
 their own weight formats, and they made this comparison possible.
 
-How these runs were made: one machine, one request client for all engines of a run, synthetic prompts, a fresh
-nonce in each prompt so that every prefill is cold, and greedy decoding. Each engine runs the checkpoint and the
-flags that its own authors recommend. The engine and the weight format differ, so a rate difference is not an
-engine-only comparison. The 2026-10-07 and 2026-10-10 runs used `tools/h2h_decode.py` with thinking off. The
-2026-10-13 run used a newer client with the same prompts. It measured cold prefill only. Halogen ran at about
-3% higher GPU clock in the 2026-10-13 run, and at about 5% higher GPU clock in the 2026-10-10 run.
-Gufo 0.9.0 ran on 2026-10-07 with its GGUF UD-Q4_K_XL pack. That run used an older Crucible build, so its
-rows show that build.
+Where each engine is faster in these runs:
 
-Quality: the same next-token test on real sessions (2026-10-10) gives an accuracy of 0.7108 for the
-3.05 bpw pack, 0.7146 for the 4.05 bpw pack, and 0.7095 for Halogen 0.16.2 with its
-v2 weights. In this test, the 3.05 bpw pack is equal to Halogen v2, and the 4.05 bpw pack is slightly better.
+- **Halogen** has the fastest cold prefill: 18.08 s at 32K and 73.50 s at 130K, against 20.06 s and 80.63 s
+  for Crucible 3.05, 21.04 s and 83.90 s for Crucible 4.05, and 24.19 s and 98.39 s for Gufo. Halogen also
+  gives the first token sooner than Crucible after a re-send, after the 32K and 130K extension of a cached
+  prompt (2.65 s at 32K and 3.06 s at 130K, against 3.13 s and 4.87 s for Crucible 3.05, and 3.31 s and
+  5.15 s for Crucible 4.05), and after the extension in the four-session test (6.61 s, against 7.17 s for
+  Crucible 3.05 and 7.64 s for Crucible 4.05).
+- **Gufo** gives the fastest re-send of a cached prompt. After an extension of the cached 130K prompt, Gufo
+  gives the first token sooner than Crucible.
+- **Halogen and Gufo** share one cached prompt among sessions. When four sessions start with the same new 32K
+  prompt at the same time, each session gives its first token in 0.4 s or less, and then decodes at 19.4 tok/s
+  (Halogen) or 17.5 tok/s (Gufo). Crucible keeps the cached prompt in one session slot, so the other three
+  sessions prefill it again: Crucible 4.05 decodes at 11.4 tok/s and its last first token comes after 69.4 s;
+  Crucible 3.05 decodes at 12.7 tok/s and its last first token comes after 65.9 s.
+- **Crucible 3.05** has the highest decode rate in each decode row where each session has its own prompt
+  start: 70.7 tok/s at 4K, 72.0 tok/s at 32K and 75.3 tok/s at 100K for one session, against 64.9, 57.6 and
+  57.6 tok/s for Crucible 4.05. Crucible 3.05 also has the shortest wall time when four sessions extend a
+  32K prompt (79.6 tok/s, against 70.8 tok/s for Crucible 4.05, 57.4 tok/s for Halogen and 29.6 tok/s for
+  Gufo). After an image, it gives the first token sooner than the other columns (0.86 s, against 0.93 s for
+  Crucible 4.05 and 1.45 s for Halogen). Gufo did not run the image test. Crucible 4.05 comes second in each
+  of these decode rows, in this wall time and in the image test.
 
-These comparison numbers are provisional in the same way as the table above.
+The headline tables above show both Crucible packs: the 3.05 pack, which decodes faster with a smaller
+model file, and the 4.05 pack, the higher-quality option.
+
+How the comparison was made: one machine, one request client for all four columns, one engine at a time,
+a fresh engine for each block, and no other work on the GPU. Each Crucible value is the median of its runs;
+Halogen and Gufo ran once. The prompts are Python standard-library source files in a coding-agent
+conversation, and generated test images. They hold no user text. Each engine runs its own weights and the
+image or the flags that its authors publish. The engine and the weight format differ, so a rate difference
+is not an engine-only comparison. Halogen ran at 2% to 4% higher mean GPU clock than Crucible (2,498 MHz
+against 2,454 MHz for 4.05 and 2,406 MHz for 3.05). Gufo runs one session in the prefill and one-session
+blocks, and four sessions in the four-session blocks. The client of these runs is not part of this tree yet.
+`tools/h2h_decode.py` is the client of the earlier runs.
+
+## Quality
+
+This table shows how much next-token quality each engine and weight format keeps on one fixed public
+text set. All rows use the same text, the same tokenizer and the same scoring method. The zero point of
+the differences is Crucible 4.05 of 2026-10-10.
+
+The differences against Crucible 4.05 are small: all are under 0.6 percentage points of next-token
+accuracy. Halogen 0.16.2 and Gufo 0.9.0 are lower with p 0.039. Crucible 3.05 is lower with p 0.12, which
+is not significant at 0.05.
+
+| Engine and weights | Date | Positions | Next-token accuracy (95%) | Accuracy difference (zero point: Crucible 4.05) | McNemar p | Matched NLL difference (zero point: Crucible 4.05) |
+|---|---|---:|---|---|---:|---|
+| Halogen 0.16.2 (.hgn v2, 4.16 bpw) | 2026-10-10 | 7,168 | 0.7095 (0.6609 to 0.7554) | -0.0050 (-0.0100 to -0.0010) | 0.039 | +0.017 (+0.006 to +0.030) |
+| Crucible 3.05 (EXL3 3.05 bpw) | 2026-10-10 | 7,168 | 0.7108 (0.6599 to 0.7578) | -0.0038 (-0.0073 to +0.0000) | 0.12 | +0.015 (+0.007 to +0.022) |
+| Crucible 4.05 (EXL3 4.05 bpw) | 2026-10-10 | 7,168 | 0.7146 (0.6646 to 0.7626) | zero point |  | zero point |
+| Gufo 0.9.0 (GGUF UD-Q4_K_XL) | 2026-10-18 | 7,168 | 0.7102 (0.6610 to 0.7563) | -0.0043 (-0.0080 to -0.0006) | 0.039 | not available (no log-probabilities) |
+| Crucible 4.05, repeat | 2026-10-18 | 7,168 | 0.7146 (0.6646 to 0.7626) | +0.0000 (+0.0000 to +0.0000) | 1 | +0.000 (+0.000 to +0.000) |
+
+### Published distance from the 16-bit model
+
+The KL divergence against the original 16-bit (BF16) model shows how far a weight file is from the
+original. Lower is closer. The maker of the EXL3 files published one measurement with one tool and one
+text for three of the four weight files in this comparison.
+
+| Weight file | Used by | Mean KL divergence from BF16 |
+|---|---|---:|
+| EXL3 4.05 bpw H6 NG6 | Crucible 4.05 | 0.0067 |
+| GGUF UD-Q4_K_XL | Gufo 0.9.0 | 0.0084 |
+| EXL3 3.05 bpw H5 NG5 | Crucible 3.05 | 0.0177 |
+| Halogen .hgn v2, 4.16 bpw | Halogen 0.16.2 | not published |
+
+- Tool: exllamav3 qbench. Text: a self-generated in-domain trace, 14,496 input and 45,588 output tokens.
+  Noise floor: 0.0025.
+- Source: the model card of [turboderp/Qwen3.8-Flash-Next-exl3](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3) (chart qb_kld), read on 2026-10-19.
+- These values measure the weight files in the reference code of exllamav3, not in the engines of this
+  comparison. An engine can add small differences of its own.
+- The Halogen model card publishes no measurement against BF16.
+
+Method:
+
+- Text: 16 chunks of 4,096 tokens. 8 chunks are prose from the wikitext-103 test set. 8 chunks are
+  public source code files.
+- Positions: every 8th token from token 512 on, 7,168 positions for each engine (3,584 prose, 3,584 code).
+- Each position is one request. The prompt is the text before the position. The engine gives 1 greedy
+  token (temperature 0). The prompt cache is on. Speculative decoding is off.
+- Every request had a prompt token count equal to the position. A request with another count is not used.
+- Next-token accuracy: the part of the positions where the greedy token is the real next token of the
+  text.
+- Matched NLL: the mean negative log-probability of the real next token, on the positions where both
+  engines have the real token in their top 20 log-probabilities. Lower is better. The value is the row
+  minus Crucible 4.05.
+- Both values score each engine against the real text. Crucible 4.05 is only the zero point of the
+  differences, not a standard for correct output.
+- 95% intervals: 1,000 bootstrap resamples of the 16 chunks. McNemar p: an exact two-sided test on the
+  positions where only one of the two engines is correct.
+
+Sources for each row:
+
+- Halogen 0.16.2 (.hgn v2, 4.16 bpw) (2026-10-10): image id 21131b0dc0de, the same as the release speed run; qwen38-flash-next-v2.hgn sha256 71246c6ab3fc1de2, the same as the release speed run; the n-gram and vision files were not hashed on 2026-10-10, but they have the same file dates (2026-09-29) as in the release speed run (n-gram sha256 3450acada94e19aa)
+- Crucible 3.05 (EXL3 3.05 bpw) (2026-10-10): Crucible binary sha256 90cd28b0 (opt-in top_logprobs build, source 465a004e); checkpoint set sha256 c9084de3cdba083b (release speed run set; the files are dated 2026-10-01, before this run)
+- Crucible 4.05 (EXL3 4.05 bpw) (2026-10-10): Crucible binary sha256 90cd28b0 (opt-in top_logprobs build, source 465a004e); checkpoint set sha256 5276585cc5c9139e (release speed run set; the files are dated 2026-10-01, before this run)
+- Gufo 0.9.0 (GGUF UD-Q4_K_XL) (2026-10-18): image id 9e0a33461493, the same as the release speed run; model file set sha256 aaa547a30746994c (the 4 GGUF shards of the release speed run; no MTP file); speculation off (--speculative off), greedy (temperature 0)
+- Crucible 4.05, repeat (2026-10-18): Crucible binary sha256 90cd28b0 (opt-in top_logprobs build, source 465a004e); checkpoint set sha256 5276585cc5c9139e
+
+What the table can show:
+
+- The difference in next-token quality between each row and Crucible 4.05, on this text set, with one
+  harness.
+- The repeat row shows if the harness gives the same numbers again on a different day.
+
+What the table cannot show:
+
+- Quality on long contexts (the prompts have 512 to 4,095 tokens), on chat or tool tasks, or with
+  thinking.
+- Gufo 0.9.0 does not return log-probabilities, so its row has no NLL value. Its accuracy compares the
+  returned text with the real token. A position where the real token (or the Crucible 4.05 token) is not
+  complete UTF-8 text is not used for that value.
+- 16 chunks give wide absolute intervals. The paired differences against Crucible 4.05 are more precise.
+- Speed. This table does not measure speed.
 
 ## What it is
 
@@ -124,7 +293,7 @@ hf download turboderp/Qwen3.8-Flash-Next-exl3 --revision "$PACK" --local-dir "$C
 ```
 
 The supported packs are in [turboderp/Qwen3.8-Flash-Next-exl3](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3).
-Use revision `4.05bpw_h6_ng6` for the quality pack.
+Use revision `4.05bpw_h6_ng6` for the quality pack. The numbers at the top of this page come from that pack.
 Keep every tokenizer file, weight shard, n-gram table, and MTP mixer patch.
 
 ### 3. Run
@@ -201,29 +370,67 @@ HTTP transport.
 
 ## Measurement details
 
-- **First token and prefill, 32K to 128K:** the same-harness run of 2026-10-13 to 14 with the release build of
-  2026-10-13. Each value is the median of six cold requests. Prefill tok/s is the prompt tokens divided by the
-  time to the first token, so it includes the server path.
-- **First token and prefill at 4K:** the same harness on 2026-10-07 with a build of 2026-10-06, median of four
-  requests. These requests start at the idle GPU clock.
-- **Decode:** one session after a prompt of each length, on 2026-10-13 with the release build of 2026-10-13, for a
-  code task and for a prose task. The 196K value is for code only, on 2026-10-11 with an earlier build. The draft
-  head gives 3.3 to 3.6 accepted tokens for each forward pass on code, and
-  2.4 to 2.7 on prose.
-- **Four sessions:** the total rate while all four sessions decode at the same time.
-- **Follow-up turns:** medians of real turns in cached conversations, from the request log of the daily engine
-  (2026-10-13 to 15), by the number of new tokens. The fit of about 0.19 s plus about
+- **The tables at the top:** the median of 9 runs (3.05, Oct 18 to 19, 2026) and of 5 runs (4.05, Oct 17 to
+  19, 2026) with the build of this source, and the daily server settings (four sessions, image input on).
+  First token and prefill are the median of two cold requests in each run. Prefill tok/s is the prompt tokens
+  divided by the time to the first token, so it includes the server path. Decode is one session in a
+  five-turn agent conversation (code, tool, sampled code, thinking, prose). The code and prose columns are
+  the tokens per second of those turns, from the first to the last token. The runs measured cold prefill at
+  32K and 130K, and decode at 4K, 32K and 100K.
+- **Four sessions:** the total rate while all four sessions decode at the same time, and the median rate of each
+  session.
+- **Follow-up turns:** the runs send a re-send and a 4K extension of each cold prompt. The older values
+  are medians of real turns in cached conversations, from the request log of the daily engine (2026-10-13 to
+  15), by the number of new tokens. The fit of about 0.19 s plus about
   1 ms for each new token is for the engine prefill time of these turns.
 - **Real use:** the turn statistics of the daily engine for 2026-10-12. They hold numbers only, no text.
 - **Prefill in this source:** this source adds a faster MoE kernel pair for the 3.05 bpw pack. In A/B pairs on
   2026-10-14, with the engine profiler on, prefill went from 1,595 tok/s to 1,630 tok/s at
-  32K, and from 1,547 tok/s to 1,580 tok/s at 128K. The table at the top does not include
-  this gain.
-- **The 4.05 bpw pack** (better quality, more weight bytes for each token): one session on 2026-10-14 decodes at
-  63 / 66 / 65 tok/s on code and
-  55 / 55 / 55 tok/s on prose, at 1K / 32K / 128K.
-  Four sessions at 32K give 112 tok/s in total on code and
-  100 tok/s on prose.
+  32K, and from 1,547 tok/s to 1,580 tok/s at 128K. The A/B pairs measure this gain
+  alone; the tables at the top include it with the other changes.
+- **The 3.05 bpw pack** (less memory, fewer weight bytes for each token): the first table at the top gives the
+  median of 9 runs. In the older decode test of 2026-10-13, with an older build, one session decoded at 77 tok/s to
+  79 tok/s on code and 60 tok/s to 67 tok/s on prose, from 1K to
+  128K. Four sessions at 32K gave 130 tok/s in total on code. That test used a single
+  synthetic request and not an agent conversation, so its rates are not comparable with the table at the top.
+  The draft head gave 3.3 to 3.6 accepted tokens for each forward pass on
+  code, and 2.4 to 2.7 on prose. In the head-to-head run of 2026-10-14,
+  the first token of a cold prompt came after 20.4 s at 32K and 82.8 s at
+  130K.
+
+**Run-to-run spread (Crucible).** Each value is the median of the runs that measured the row. The range is
+the lowest to the highest run, with the number of runs.
+
+| Row | Crucible 4.05 | Crucible 3.05 |
+|---|---|---|
+| Cold 32K, first token (s) | 21.04 (20.67 to 21.29; n 5) | 20.06 (19.91 to 20.22; n 9) |
+| Cold 32K, prefill (tok/s) | 1,561 (1,543 to 1,589; n 5) | 1,638 (1,625 to 1,650; n 9) |
+| Cold 130K, first token (s) | 83.90 (83.69 to 84.66; n 5) | 80.63 (80.36 to 81.18; n 9) |
+| Cold 130K, prefill (tok/s) | 1,550 (1,536 to 1,554; n 5) | 1,613 (1,602 to 1,619; n 9) |
+| Decode 4K, 1 session, code (tok/s) | 64.9 (64.6 to 65.0; n 5) | 70.7 (70.6 to 70.8; n 9) |
+| Decode 32K, 1 session, code (tok/s) | 57.6 (57.5 to 57.8; n 5) | 72.0 (71.7 to 72.1; n 9) |
+| Decode 100K, 1 session, code (tok/s) | 57.6 (56.8 to 57.7; n 5) | 75.3 (74.9 to 75.5; n 8) |
+| Decode 4K, 1 session, prose (tok/s) | 52.7 (52.4 to 52.7; n 5) | 56.5 (56.4 to 56.5; n 9) |
+| Decode 32K, 1 session, prose (tok/s) | 50.2 (49.9 to 50.2; n 5) | 58.4 (58.3 to 58.5; n 9) |
+| Decode 100K, 1 session, prose (tok/s) | 49.6 (49.1 to 49.8; n 5) | 55.0 (54.9 to 55.1; n 8) |
+| Decode 4K, 4 sessions, each / total (tok/s) | 25.6 / 109.0 (24.5 to 26.5 / 107.6 to 112.1; n 5) | 29.0 / 128.2 (27.5 to 30.8 / 125.0 to 134.4; n 9) |
+| Decode 32K, 4 sessions, each / total (tok/s) | 24.1 / 109.0 (23.9 to 25.1 / 106.2 to 113.4; n 5) | 28.5 / 131.8 (27.5 to 29.2 / 128.6 to 135.8; n 9) |
+| Decode 100K, 4 sessions, each / total (tok/s) | 22.4 / 96.9 (21.7 to 23.1 / 95.5 to 101.4; n 5) | 27.0 / 119.5 (25.8 to 27.8 / 116.7 to 122.4; n 8) |
+| 32K, 4 sessions, shared prompt start, each / total (tok/s) | 11.4 / 105.5 (11.3 to 11.6 / 101.5 to 110.0; n 5) | 12.7 / 128.4 (12.6 to 12.9 / 122.9 to 131.9; n 9) |
+| 4 sessions extend a 32K prompt, tokens / wall (tok/s) | 70.8 (68.9 to 71.1; n 5) | 79.6 (76.4 to 82.7; n 9) |
+| 4 sessions extend a 32K prompt, first token (s) | 7.64 (7.59 to 8.38; n 5) | 7.17 (7.12 to 7.92; n 9) |
+| 32K + 4K new tokens, first token (s) | 3.31 (2.70 to 3.34; n 5) | 3.13 (2.53 to 3.22; n 9) |
+| 130K + 4K new tokens, first token (s) | 5.15 (5.15 to 5.19; n 5) | 4.87 (4.84 to 4.92; n 9) |
+| Image first, first token (s) | 0.93 (0.93 to 0.94; n 5) | 0.86 (0.86 to 0.87; n 9) |
+
+At 32K + 4K new tokens, the Crucible runs fall into two groups, about 0.6 s apart. 4 of the 14 runs
+(2 of 5 for Crucible 4.05 and 2 of 9 for Crucible 3.05) give the first token after about 2.5 to 2.7 s.
+The other 10 runs (3 of 5 and 7 of 9) give it after about 3.1 to 3.3 s. The cause is the GPU clock. In
+the 5 s pause between requests, the clock falls to about 600 MHz. At the next request, it rises to full
+speed in 2 to 3 s, and in some requests the rise starts up to 0.7 s later. The cache use and the work
+are the same in both groups. The clock behavior comes from the power settings of the machine, so it is
+the same for all engines. Halogen and Gufo ran once, so their value can be in either group. The same
+clock effect explains part of the spread of the cold 32K first token.
 
 ## Model license
 

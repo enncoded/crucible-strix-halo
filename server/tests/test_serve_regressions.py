@@ -289,7 +289,8 @@ def test_engine_messages_cover_the_serve_path():
                          r'RecoverableOpenError)\("([^"\\]*)"')
     serve = ("engine/serve/serve.h", "engine/serve/serve_protocol.h", "engine/serve/batched_serve.h", "engine/serve/batched_serve_protocol.h",
              "engine/serve/batch_session.h", "engine/runtime/conversation_admission.h", "engine/model/flashnext/multimodal.h", "engine/model/flashnext/vision.h",
-             "engine/serve/serve_settings.h", "engine/serve/batched_serve_settings.h", "engine/engine.hip")
+             "engine/serve/serve_settings.h", "engine/serve/batched_serve_settings.h", "engine/engine.hip",
+             "engine/runtime/draft_policy.h")
     # throw std::runtime_error(flag ? "text" : "text"), as the line limit with and without --vision.
     choice = re.compile(r'runtime_error\([^"();]*\?\s*"([^"\\]*)"\s*:\s*"([^"\\]*)"')
     def messages(text):

@@ -73,6 +73,8 @@ def engine_environment(environ):
 class EngineBackend:
     # Client event queue size per job; a batch worker that decodes inside prefill chunks raises it.
     event_capacity = 32
+    # Batch mode with serve --draft-stats: speculative requests ask the engine for per-token draft counters.
+    draft_detail = False
     # Seconds that close() waits after the end of input before it stops the engine with a signal. The batch worker
     # sets it when the engine writes its states to disk at the end of input (engine/runtime/state_disk.h).
     flush_seconds = 0
@@ -212,6 +214,8 @@ class EngineBackend:
         if shared_prefix_tokens:
             # Sent only when known, so engines without the G7 field see the same payload as before.
             policy = policy | dict(shared_prefix_tokens=shared_prefix_tokens)
+        if self.draft_detail and request.spec and request.max_tokens > 1:
+            policy = policy | dict(draft_detail=1)  # sent only with the flag, so the default payload stays as before
         if getattr(request, "enable_thinking", False) and getattr(self, "cache_tail", False):
             # Clients often send back the answer without the reasoning, and a closed think block continues on a
             # second job. The tail of such a turn must not replace the session's resume point
@@ -340,6 +344,7 @@ class EngineBackend:
             return dict(event, crucible_t=t) if enabled else event
         if event.get("event") == "done":
             job.turn["t_done"] = t
+            if "draft_tally" in event: job.turn["draft_event"] = event  # for the per-token day file (draft_stats.py)
             summary = metrics.finalize(job.turn, event)
             if job.turn.get("log", True):
                 metrics.emit(metrics.turn_line(summary, event, metrics.draft_fields((job.turn, event)),

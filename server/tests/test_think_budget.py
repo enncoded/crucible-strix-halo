@@ -131,6 +131,7 @@ class TurnLogTest(unittest.TestCase):
         self.assertEqual(reply["usage"]["prompt_tokens_details"], dict(cached_tokens=2))
         self.assertEqual(turns[0]["cached_tokens"], 2)
         self.assertEqual(turns[0]["cont_cached_tokens"], 9)
+        self.assertNotIn("replay_hit", turns[0])  # the opened event names no cache class: unknown, not false
 
     def test_capped_turn_that_closes_itself_writes_the_usual_line(self):
         backend = SequenceBackend(([REASON] * 5 + [END, BREAK, ANSWER, IM_END], "stop", 2))
@@ -144,6 +145,55 @@ class TurnLogTest(unittest.TestCase):
         backend = SequenceBackend(([REASON] * 3, "length"))
         reply, turns = logged(backend, chat(max_tokens=3))
         self.assertEqual([(t["completion_tokens"], t["finish"]) for t in turns], [(3, "length")])
+
+    def test_capped_turn_with_no_room_reports_the_restore(self):
+        # max_tokens 1 with thinking. The cap closes the block at token 1 with no
+        # room left, so the server cancels the job before its done event. The line and the reply still name the
+        # restore of the opened event (2 of 3 prompt tokens), not cached null (a cold turn in the gateway).
+        backend = SequenceBackend(([REASON], "length", 0, 2))
+        reply, turns = logged(backend, chat(max_tokens=1))
+        self.assertEqual(reply["usage"]["prompt_tokens_details"], dict(cached_tokens=2))
+        self.assertEqual([(t["prompt_tokens"], t["cached_tokens"], t["completion_tokens"], t["finish"]) for t in turns],
+                         [(len(PROMPT), 2, 1, "length")])
+        self.assertNotIn("replay_hit", turns[0])  # the opened event names no cache class: unknown, not false
+
+    def test_capped_turn_with_no_room_counts_its_prefill_rows(self):
+        class Chunked(SequenceBackend):
+            def submit(self, ids, request, **options):
+                job = super().submit(ids, request, **options)
+                metrics.add_chunk(job.turn, 0.0, 0.25, 1)  # the batch worker's record of the one prefill chunk
+                return job
+        _, turns = logged(Chunked(([REASON], "length", 0, 2)), chat(max_tokens=1))
+        self.assertEqual((turns[0]["cached_tokens"], turns[0]["prefill_tokens"], turns[0]["prefill_s"]), (2, 1, 0.25))
+
+    def test_capped_turn_without_an_opened_count_stays_unknown(self):
+        # The serial backend has no opened event: the count stays null, never a guessed 0.
+        reply, turns = logged(SequenceBackend(([REASON], "length", 0)), chat(max_tokens=1))
+        self.assertNotIn("prompt_tokens_details", reply["usage"])
+        self.assertIsNone(turns[0]["cached_tokens"])
+
+    def test_stop_string_in_a_capped_turn_reports_the_restore(self):
+        backend = SequenceBackend(([REASON, END, BREAK, ANSWER, ANSWER, IM_END], "stop", 0, 2))
+        reply, turns = logged(backend, chat(max_tokens=2048, stop=["ok"]))
+        self.assertEqual(reply["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(reply["usage"]["prompt_tokens_details"], dict(cached_tokens=2))
+        self.assertEqual([(t["cached_tokens"], t["finish"]) for t in turns], [(2, "stop")])
+
+    def test_stop_string_reply_without_a_cap_reports_the_restore(self):
+        # The stop path's reply change covers every stop-string reply, not only a capped one.
+        backend = SequenceBackend(([ANSWER, ANSWER, IM_END], "stop", 0, 2))
+        reply, _ = logged(backend, chat(max_tokens=2048, enable_thinking=False, stop=["ok"]))
+        self.assertEqual(reply["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(reply["usage"]["prompt_tokens_details"], dict(cached_tokens=2))
+
+    def test_stop_string_after_a_continuation_reports_the_first_jobs_restore(self):
+        # The continuation restored 9 (the first job's snapshot); the client's restore is the first job's 2.
+        backend = SequenceBackend(([REASON] * 1500, "length", 0, 2), ([ANSWER, ANSWER, IM_END], "stop", 9, 9))
+        reply, turns = logged(backend, chat(max_tokens=2048, stop=["ok"]))
+        self.assertEqual(reply["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(reply["usage"]["prompt_tokens_details"], dict(cached_tokens=2))
+        self.assertEqual([(t["cached_tokens"], t["finish"]) for t in turns], [(2, "stop")])
+        self.assertNotIn("replay_hit", turns[0])
 
     def test_uncapped_turn_keeps_the_backend_line(self):
         backend = SequenceBackend(([REASON] * 3, "length"))

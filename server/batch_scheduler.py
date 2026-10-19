@@ -23,6 +23,23 @@ PASS_EVENTS = 9
 # the 0.7 s of 4,096-row chunks with passes today (at 511 rows it would be about 0.9 s). Passes never change
 # bits; 0 restores passes in every bulk chunk. A rule on time and depth is a train-16 follow-up.
 INTERLEAVE_MIN_ROWS = 300
+# One encoder slice (engine/model/flashnext/vision.h kSliceWork, about 60-80 ms): 2.196 s for the 29 slices of a 2560x1440
+# image on gfx1151 (night 1). The worker updates it from the slice commands it runs.
+ENCODER_SLICE_SECONDS = 0.076
+# Each measured slice is held to this band before it enters the average: one long command (a stall, a slow
+# file read) moves the average a little, never by 10 times.
+ENCODER_SLICE_BAND = (0.02, 0.2)
+# The most slices that count: 256 images of 29 slices (2560x1440) are 7,424.
+ENCODER_SLICES_MAX = 1 << 13
+
+
+def encoder_rows(slices, slice_seconds, rate):
+    """Prompt rows that cost the device time of the encoder slices that a turn still owes.
+
+    SRPT and aging then rank an image turn by all its work: a 2560x1440 image adds about 3,300 rows at 1,500 rows/s, so
+    a text turn of 5,000 rows goes before a 3,600-row image turn (3.3 s against 4.5 s). Order never changes bits.
+    """
+    return round(min(slices, ENCODER_SLICES_MAX) * slice_seconds * rate) if slices > 0 else 0
 
 
 def interleave_passes(every, layers=MODEL_LAYERS):

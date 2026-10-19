@@ -34,6 +34,7 @@ struct PromptEngine {
     return {tokens[rows - 1] + 1};
   }
   // Rows below keep have no final trunk stacks (last-layer pruning); the head row stays when predict is set.
+  // As in the engine, a bulk chunk's stacks stay in a padded buffer; H() does not hold them.
   std::vector<int> Prefill(const int* tokens, int rows, const std::string& dump, bool predict,
                            const PrefillBetween* = nullptr, int keep = 0) {
     in_prefill = true;
@@ -42,8 +43,23 @@ struct PromptEngine {
     const int skip = std::min(keep, predict ? rows - 1 : rows);
     for (int r = 0; r < skip; ++r) h[(size_t)r * kWide] = h[(size_t)(r + 1) * kWide - 1] = -7;
     pruned += std::max(skip, 0);
+    padded.assign((size_t)rows * kPadded, -3);
+    for (int r = 0; r < rows; ++r) {
+      padded[(size_t)r * kPadded] = h[(size_t)r * kWide];
+      padded[(size_t)r * kPadded + kWide - 1] = h[(size_t)(r + 1) * kWide - 1];
+      h[(size_t)r * kWide] = h[(size_t)(r + 1) * kWide - 1] = -9;
+    }
     return predict ? result : std::vector<int>{};
   }
+  void CopyPrefillStacks(float* dst, int first, int rows) {
+    assert(first >= 0 && rows >= 1 && (size_t)(first + rows) * kPadded <= padded.size());
+    for (int r = 0; r < rows; ++r) {
+      dst[(size_t)r * kWide] = padded[(size_t)(first + r) * kPadded];
+      dst[(size_t)(r + 1) * kWide - 1] = padded[(size_t)(first + r) * kPadded + kWide - 1];
+    }
+  }
+  static constexpr size_t kPadded = kWide + 64;
+  std::vector<float> padded;
 };
 
 void CheckPrompt(PromptEngine& eng, int length, int chunk, int limit, bool mtp_on) {

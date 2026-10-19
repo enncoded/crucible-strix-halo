@@ -108,6 +108,7 @@ engine/sequence_state.h	engine/runtime/sequence_state.h	runtime	Mutable per-sequ
 engine/serve.h	engine/serve/serve.h	serve	Serial serve loop (retires in train 19).	
 engine/serve_protocol.h	engine/serve/serve_protocol.h	serve	JSON-line request parsing.	
 engine/serve_settings.h	engine/serve/serve_settings.h	serve	Serve startup switches.	
+engine/serve/slot_base.h	engine/serve/slot_base.h	serve	Per-slot base snapshot of an incremental tail save.	New in tail-incr; tests/tail_incr_test.cpp SlotBaseLifecycle.
 engine/sha256.h	engine/runtime/sha256.h	runtime	SHA-256 for image and state digests. A leaf: standard library only.	Decision (Oct 10): a leaf that any file may include.
 engine/slot_checkpoint_io.h	engine/runtime/slot_checkpoint_io.h	runtime	Fragment after class Engine: slot checkpoint copies.	
 engine/slot_checkpoints.h	engine/runtime/slot_checkpoints.h	runtime	In-slot resume points.	
@@ -164,3 +165,4 @@ engine/model/flashnext/README.md	engine/model/flashnext/README.md	model/flashnex
 engine/runtime/README.md	engine/runtime/README.md	runtime	Module charter; the move puts it in place.	
 engine/serve/README.md	engine/serve/README.md	serve	Module charter; the move puts it in place.	
 engine/cli/README.md	engine/cli/README.md	cli	Module charter; the move puts it in place.	
+engine/serve/draft_tally.h	engine/serve/draft_tally.h	serve	Per-position and per-token draft acceptance counters of batched serve.	

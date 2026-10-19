@@ -15,6 +15,7 @@ concept HasGemmPrefill = requires(E& e, const int* t, const std::string& d) {
   { e.PrefillRows() } -> std::convertible_to<int>;
   { e.PromptStacks() } -> std::convertible_to<float*>;
   e.Prefill(t, 1, d, true);
+  e.CopyPrefillStacks(e.PromptStacks(), 0, 1);
 };
 
 // A bounded window starts at relative position zero. Target state keeps its replay count.
@@ -87,11 +88,13 @@ std::vector<int> RunPrompt(Engine& eng, std::span<const int> ids, int chunk, boo
     if (mtp_on && start_row < R) {
       const int warm_rows = R - start_row;
       float* source = eng.H() + size_t(start_row) * kWide;
-      if (bulk) {
-        if (warm_rows > prefill) std::abort();  // PromptStacks() holds one grid chunk
-        copy(stacks, source, size_t(warm_rows) * kWide);
-        source = stacks;
-      }
+      if constexpr (HasGemmPrefill<Engine>)
+        if (bulk) {
+          // A bulk chunk's stacks stay in the engine's padded buffer, not in H().
+          if (warm_rows > prefill) std::abort();  // PromptStacks() holds one grid chunk
+          eng.CopyPrefillStacks(stacks, start_row, warm_rows);
+          source = stacks;
+        }
       const int pairs = warm_rows - 1 + int(have_carry);
       // A long warm-up (a large or full MTP window) runs in one bulk pass (mtp_bulk.h); the 8-row loop is skipped.
       bool warmed = false;

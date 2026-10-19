@@ -2,6 +2,7 @@
 #pragma once
 #include "../runtime/slot_checkpoints.h"
 #include "serve_protocol.h"
+#include "draft_tally.h"
 #include "../runtime/batch_spec_contract.h"
 #include "cache_status.h"
 #include "../runtime/prefill_interleave.h"
@@ -35,6 +36,7 @@ inline bool IsRecoverableBatchError(const std::exception& error, std::string_vie
 // draft-and-verify steps. The done event carries them so the server can log them per turn.
 struct BatchDraftStats {
   long proposed = 0, accepted = 0, steps = 0;
+  std::optional<DraftTally> tally;  // counters by position and by token; unset: only the three above
 };
 
 struct BatchEvent {
@@ -71,7 +73,7 @@ inline std::string BatchDraftFields(const BatchEvent& event) {
   if (!event.done || !event.draft) return {};
   return ",\"draft_proposed\":" + std::to_string(event.draft->proposed) +
          ",\"draft_accepted\":" + std::to_string(event.draft->accepted) +
-         ",\"spec_steps\":" + std::to_string(event.draft->steps);
+         ",\"spec_steps\":" + std::to_string(event.draft->steps) + (event.draft->tally ? event.draft->tally->Fields() : "");
 }
 
 // The done event's cache fields (JSON members with a leading comma); empty when the cache did not report.
@@ -156,6 +158,18 @@ struct BatchCacheHooks {
   // continues from that tail). Runs on the selected slot before any write, so the host can save the state that
   // leaves the device ("One copy").
   std::function<void(int slot, bool resumed)> release;
+  // Optional, all five with the checkpoint hooks: slot frontiers.
+  // `frontier`: the session frontier at `cursor` of a normal turn may stay in the slot instead of a host copy. The
+  // hook calls `keep` with the frontier's metadata; it returns true when the slot kept it (no host capture there).
+  std::function<bool(const ServeRequest&, size_t cursor, const std::function<bool(const SlotFrontier&)>& keep)> frontier;
+  // `frontier_fits`: the host restore rule (Find: boundary, BatchRestoreLimit, prompt check) for a Frontier point.
+  std::function<bool(const ServeRequest&, const SlotCheckpoint&)> frontier_fits;
+  // `handover`: copies Frontier point (slot, index) to the host. Runs on the selected slot before an open writes it.
+  std::function<void(int slot, int index, const SlotCheckpoint&)> handover;
+  // `drop`: the open resumes from the slot's own Frontier point, so the tail that the slot holds leaves unsaved.
+  std::function<void(int slot)> drop;
+  // `resume_host`: with `resume`, whether it would restore a host tail instead of the slot's tail (HostTailFirst).
+  std::function<bool(const ServeRequest&, BatchResident)> resume_host;
   // Optional: the cache key of `tokens` (the request's prompt, or a prefix or extension of it). Slot resume and slot
   // checkpoints compare keys, not token IDs. Without the hook the key is RequestCacheKey: two images have the same
   // pad token IDs, so image tokens key by image (text keys equal the tokens).
@@ -291,6 +305,7 @@ class BatchSession {
       resident = BatchResident{resident_[size_t(slot)]->key.size(), resident_[size_t(slot)]->replay,
                                resident_[size_t(slot)]->guarded};
     const auto point = resident ? std::nullopt : Checkpoint(slot, request, key);
+    const bool from_frontier = point && checkpoints_.At(slot, *point).kind == CheckpointKind::Frontier;
     // Where the prompt leaves the slot's previous tail, for the divergence line of a checkpoint resume.
     std::optional<std::pair<size_t, size_t>> left;
     if (point && resident_[size_t(slot)]) {
@@ -303,7 +318,11 @@ class BatchSession {
     resident_[size_t(slot)].reset();  // this request writes the slot
     DeviceUpdate([&] {
       engine_.SelectStream(slot);
-      if (held && cache_.release) cache_.release(slot, resident.has_value());
+      // a Frontier point that this open does not keep goes to the host before any write.
+      GuardFrontiers(slot, request, resident, point);
+      // HIGH-2: a resume from the slot's own Frontier point leaves the slot's tail, which the prompt does not repeat.
+      if (held && from_frontier && cache_.drop) cache_.drop(slot);
+      else if (held && cache_.release) cache_.release(slot, resident.has_value());
       if (!resident && !point) engine_.Reset();
       Request& owned = *state;
       active_.emplace(id, std::move(state));
@@ -313,8 +332,15 @@ class BatchSession {
         if (point) {
           const SlotCheckpoint& saved = checkpoints_.At(slot, *point);
           cache_.checkpoint_load(slot, *point, saved);
-          owned.grid_point = saved.kind == CheckpointKind::Grid;
-          hit = BatchRestore{saved.hist.size(), false, saved.replay, true, false, saved.guarded};
+          if (saved.kind == CheckpointKind::Frontier) {
+            // A host frontier hit at the same position (MEDIUM-1): no head forward; merged launches, captures and
+            // no Start point, as after that hit.
+            hit = BatchRestore{saved.hist.size()};
+            checkpoints_.Confirm(slot, *point);
+          } else {
+            owned.grid_point = saved.kind == CheckpointKind::Grid;
+            hit = BatchRestore{saved.hist.size(), false, saved.replay, true, false, saved.guarded};
+          }
         } else {
           hit = resident ? cache_.resume(owned.options, *resident) : cache_.restore(owned.options);
         }
@@ -366,6 +392,15 @@ class BatchSession {
     }
   }
 
+  // every Frontier point as (slot, buffer index, point), the longest of each slot first. A stopping engine
+  // writes them to disk before the held tails (BatchPrefixCache::FlushToDisk).
+  std::vector<std::tuple<int, int, SlotCheckpoint>> FrontierPoints() const {
+    std::vector<std::tuple<int, int, SlotCheckpoint>> points;
+    for (int slot = 0; slot < slots_; ++slot)
+      for (const int index : checkpoints_.Frontiers(slot)) points.emplace_back(slot, index, checkpoints_.At(slot, index));
+    return points;
+  }
+
   // The disk tier: start the read of a disk state for `request` before its open, so the open restores from memory
   // and the device worker never waits for the disk. Reads no device state and changes no slot.
   BatchStage Stage(const ServeRequest& request) const {
@@ -376,7 +411,7 @@ class BatchSession {
     for (int slot = 0; slot < slots_; ++slot) {
       if (Resumable(slot, request, key)) floor = std::max(floor, resident_[size_t(slot)]->key.size());
       if (cache_.checkpoint_load)
-        if (const auto best = checkpoints_.Best(slot, key)) floor = std::max(floor, checkpoints_.At(slot, *best).hist.size());
+        if (const auto best = BestPoint(slot, request, key)) floor = std::max(floor, checkpoints_.At(slot, *best).hist.size());
     }
     return cache_.stage(request, floor);
   }
@@ -494,7 +529,7 @@ class BatchSession {
       if (cache_.capture && !state.from_tail) {
         const double saved = Clock();
         const uint64_t tried = CacheAttempts();
-        cache_.capture(state.options, state.cursor);
+        if (!KeepFrontier(state)) cache_.capture(state.options, state.cursor);
         NoteSave(tried, state.saved_tokens, state.refused);
         state.capture += Clock() - saved;
       }
@@ -755,6 +790,7 @@ class BatchSession {
     const auto found = active_.find(id);
     if (found == active_.end()) throw std::invalid_argument("request is not active");
     if (cache_.expect) cache_.expect(found->second->options, found->second->slot, 0);
+    slot_used_[size_t(found->second->slot)] = ++resident_tick_;
     const bool spec = found->second->spec;
     active_.erase(found);
     if (spec) spec_.close(id);
@@ -927,24 +963,73 @@ class BatchSession {
   std::tuple<int, size_t, uint64_t> Affinity(int slot, const ServeRequest& request, const std::vector<int>& key) const {
     const auto& held = resident_[size_t(slot)];
     if (held && Resumable(slot, request, key)) return {4, held->key.size(), 0};
-    // A slot checkpoint that the prompt repeats is the session's own older state.
-    const size_t point = request.cache_control == "auto" ? checkpoints_.Common(slot, key) : 0;
+    // A slot checkpoint that the prompt repeats is the session's own older state (with the pick rule of Checkpoint).
+    const auto best = request.cache_control == "auto" ? BestPoint(slot, request, key) : std::nullopt;
+    const size_t point = best ? checkpoints_.At(slot, *best).hist.size() : 0;
     const size_t common = held ? size_t(std::mismatch(held->key.begin(), held->key.end(), key.begin(), key.end()).first -
                                         held->key.begin()) : 0;
     if (point > size_t(request.shared_prefix_tokens)) return {3, std::max(point, common), 0};
-    if (!held) return {2, 0, 0};
+    // a slot that holds only a Frontier point is not empty (HIGH-1). Among the slots that other sessions
+    // left, the smallest loss goes first (the Frontier point that the handover must copy), then the oldest.
+    const size_t loss = checkpoints_.FrontierLength(slot);
+    const size_t keep = std::numeric_limits<size_t>::max() - loss;
+    if (!held) return loss ? std::tuple<int, size_t, uint64_t>{0, keep, std::numeric_limits<uint64_t>::max() - slot_used_[size_t(slot)]}
+                           : std::tuple<int, size_t, uint64_t>{2, 0, 0};
     if (common > size_t(request.shared_prefix_tokens) && common >= held->key.size() - held->key.size() / 16)
       return {3, common, 0};
     if (common > size_t(request.shared_prefix_tokens)) return {1, common, 0};
-    return {0, 0, std::numeric_limits<uint64_t>::max() - held->used};
+    return {0, keep, std::numeric_limits<uint64_t>::max() - held->used};
   }
   // The slot checkpoint to resume from, when it is longer than what the host cache would restore.
   // `key`: the request's prompt key.
   std::optional<int> Checkpoint(int slot, const ServeRequest& request, const std::vector<int>& key) const {
     if (!cache_.checkpoint_load || !cache_.restore || request.cache_control != "auto") return std::nullopt;
-    const auto best = checkpoints_.Best(slot, key);
+    const auto best = BestPoint(slot, request, key);
     if (!best || (cache_.peek && cache_.peek(request) >= checkpoints_.At(slot, *best).hist.size())) return std::nullopt;
     return best;
+  }
+  // MEDIUM-2: a Frontier point resumes only where the host rule (Find) would restore a host frontier of its length,
+  // so the slot and the host give the same restore for one prompt.
+  std::optional<int> BestPoint(int slot, const ServeRequest& request, std::span<const int> key) const {
+    return checkpoints_.Best(slot, key, [&](const SlotCheckpoint& point) {
+      return point.kind != CheckpointKind::Frontier || (cache_.frontier_fits && cache_.frontier_fits(request, point));
+    });
+  }
+  bool FrontiersOn() const {
+    return cache_.frontier && cache_.frontier_fits && cache_.handover && cache_.checkpoint_save &&
+           cache_.checkpoint_load && (!cache_.resume || cache_.resume_host);
+  }
+  // the session frontier at the cursor stays in the slot (a Frontier point) when the slot has a buffer for it.
+  bool KeepFrontier(Request& state) {
+    if (!FrontiersOn() || state.options.cache_control == "bypass") return false;
+    return cache_.frontier(state.options, state.cursor, [&](const SlotFrontier& meta) {
+      const std::span<const int> below(state.options.ids.data(), state.cursor);
+      auto key = Key(state.options, below);
+      const auto pick = checkpoints_.FrontierVictim(state.slot, key, state.id);
+      if (!pick.held && !pick.index) return false;
+      if (pick.held) {
+        // The slot holds this state already; a confirmed frontier confirms it (LOW-3).
+        if (!meta.speculative) checkpoints_.Confirm(state.slot, *pick.index);
+      } else {
+        cache_.checkpoint_save(state.slot, *pick.index);
+        checkpoints_.Store(state.slot, *pick.index, {std::vector<int>(below.begin(), below.end()), std::move(key), 0,
+                                                     false, CheckpointKind::Frontier, state.id, meta});
+      }
+      state.saved_tokens = std::max(state.saved_tokens, state.cursor);
+      return true;
+    });
+  }
+  // HIGH-1: the Frontier points that this open would drop go to the host first, the longest first. The open keeps
+  // them (Keep, below) only on a slot resume (every point lies below the tail), unless `resume` restores a host tail
+  // instead, or on a checkpoint load at or above them. A reset, a host restore or another session keeps none.
+  void GuardFrontiers(int slot, const ServeRequest& request, const std::optional<BatchResident>& resident,
+                      std::optional<int> point) {
+    if (!FrontiersOn()) return;
+    size_t keep = 0;
+    if (resident) keep = cache_.resume_host && cache_.resume_host(request, *resident) ? 0 : SIZE_MAX;
+    else if (point) keep = checkpoints_.At(slot, *point).hist.size();
+    for (const int index : checkpoints_.Frontiers(slot))
+      if (checkpoints_.At(slot, index).hist.size() > keep) cache_.handover(slot, index, checkpoints_.At(slot, index));
   }
   void SaveCheckpoint(Request& state, CheckpointKind kind, int replay, bool guarded) {
     if (!cache_.checkpoint_save || state.options.cache_control == "bypass") return;
@@ -994,6 +1079,7 @@ class BatchSession {
         tails_.push_back({id, state.slot, state.options, std::move(state.generated),
                           spec && spec_.replay ? spec_.replay(id) : 0,
                           {state.from_tail && !state.from_checkpoint, state.tail_guarded, state.slot}});
+      slot_used_[size_t(state.slot)] = ++resident_tick_;
       active_.erase(id);
       if (spec) spec_.close(id);
     }
@@ -1012,6 +1098,7 @@ class BatchSession {
   std::vector<std::optional<Resident>> resident_;
   SlotCheckpoints checkpoints_;
   uint64_t resident_tick_ = 0;
+  std::array<uint64_t, kMaxRows> slot_used_{};  // per slot: when its last request ended (Affinity)
   std::array<uint64_t, kMaxRows> generations_{};
   uint64_t verify_turn_ = 0;
   int pass_rows_ = kMaxRows;  // SetPassRows

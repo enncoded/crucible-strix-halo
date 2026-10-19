@@ -24,12 +24,12 @@ static void Keys() {
 }
 
 static void Limits() {
-  // A bounded window stops before its warm-up rows; the full window and plain requests stop one row early.
-  assert(BatchRestoreLimit(Request(10000, 7, 32, 256)) == 10000 - 256);
+  // Every request stops one row early; a bounded window no longer stops before its warm-up rows.
+  assert(BatchRestoreLimit(Request(10000, 7, 32, 256)) == 9999);
   assert(BatchRestoreLimit(Request(10000, 7, 32, 0)) == 9999);
   assert(BatchRestoreLimit(Request(10000, 0, 32, 256)) == 9999);
   assert(BatchRestoreLimit(Request(10000, 7, 1, 256)) == 9999);
-  assert(BatchRestoreLimit(Request(100, 7, 32, 256)) == 0);
+  assert(BatchRestoreLimit(Request(100, 7, 32, 256)) == 99);
   assert(BatchRestoreLimit(Request(1, 7, 32, 0)) == 0);
 }
 
@@ -154,9 +154,36 @@ static void Cache() {
   assert(!cache.Capture(ids, spec, {32, CacheRetention::Session}, 64, room, [&] { return Make(ids, 32, true, 0, false); }));
 }
 
+// an identical re-send of a prompt whose last grid frontier lies in its last 256 rows (the default MTP window).
+// The first send (max_tokens 1, no tail) saved the frontier; the re-send (spec on, window 256) must restore it, as a
+// full-window request does. Sizes of the head-to-head case: a 32,849-token prompt, boundary 5 rows before its end.
+static void Resend() {
+  std::vector<int> ids(32849);
+  std::iota(ids.begin(), ids.end(), 1);
+  const size_t boundary = ids.size() - 5, rows = 4096;
+  ConversationPolicy policy;
+  policy.prefill_rows = int(rows);
+  BatchConversationCache<Snapshot> cache(1 << 20, {}, 4, 0);
+  const auto frontiers = BatchCacheFrontiers(ids.size(), boundary, int(rows));
+  assert(frontiers.size() == 1 && frontiers[0].position == 32768 && !frontiers[0].speculative);
+  assert(cache.Capture(ids, policy, frontiers[0], 64, uint64_t(9) << 30, [&] {
+    auto s = std::make_shared<Snapshot>(*Make(ids, 32768, true, 0, false));
+    s->resume.prompt_boundary = boundary;
+    return std::shared_ptr<const Snapshot>(s);
+  }));
+  for (const auto& resend : {Request(ids.size(), 7, 320, 256), Request(ids.size(), 7, 320, 0),
+                             Request(ids.size(), 0, 320, 256), Request(ids.size(), 7, 1, 256)}) {
+    const size_t limit = BatchRestoreLimit(resend);
+    assert(cache.PeekFind(ids, policy, boundary, limit, int(rows)) == 32768);
+    const auto hit = cache.Find(ids, policy, boundary, limit, int(rows));
+    assert(hit && hit->snapshot->hist.size() == 32768);
+  }
+}
+
 int main() {
   Keys();
   Limits();
+  Resend();
   Held();
   TailFlush();
   Frontiers();
