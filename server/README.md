@@ -179,8 +179,8 @@ The server protects itself against a bad client:
   A field in the request always wins over the server default. See [Server defaults](#server-defaults).
 - `seed`: an unsigned 64-bit integer. An omitted or null seed uses fresh system entropy.
   Every response and stream chunk reports the selected value as `seed`.
-- `presence_penalty`, `frequency_penalty`: accepted only as `0` or null, because the engine has no penalty sampler.
-  Any other value gets HTTP 400.
+- `presence_penalty`, `frequency_penalty`: the server accepts these fields only when they are `0` or null. They have
+  no effect, because the engine has no penalty sampler. Any other value gets HTTP 400.
 - `max_tokens` or `max_completion_tokens`: a positive integer. The default is 128 when the request has neither field.
   The flag `--default-max-tokens N|max` changes the default (see [Server defaults](#server-defaults)).
 - `stop`: one string or at most four strings, each with 1 to 4096 UTF-8 bytes.
