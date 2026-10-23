@@ -118,6 +118,14 @@ def number(value, field, low, high):
         raise ApiError(f"{field} must be a finite number in [{low},{high}].", field)
     return float(value)
 
+# Some clients (SillyTavern) send both penalties in every request. The engine has no penalty sampler, so only
+# "off" is accepted: 0 or null. The check keeps nothing, so the Request is the same as without the field.
+PENALTY_FIELDS = ("presence_penalty", "frequency_penalty")
+
+def penalty_off(value, field):
+    if value is not None and not (type(value) in (int, float) and value == 0):  # NaN is not equal to 0
+        raise ApiError(f"{field} must be 0. Crucible has no penalty sampler.", field)
+
 def boolean(value, field):
     if type(value) is not bool:
         raise ApiError(f"{field} must be true or false.", field)
@@ -194,11 +202,14 @@ def validate_request(body, kind, model, default_thinking=False, vision=None, voc
                "stream", "stream_options", "spec", "enable_thinking", "reasoning_effort", "chat_template_kwargs", *BUDGET_FIELDS,
                "return_token_ids",
                "top_k", "top_p", "min_p", "seed", "draft_q", "draft_head", "mtp_prefix", "draft_adapt",
-               "cache_control", "tools", "tool_choice", "parallel_tool_calls", "stop", "crucible_metrics"}
+               "cache_control", "tools", "tool_choice", "parallel_tool_calls", "stop", "crucible_metrics", *PENALTY_FIELDS}
     unknown = set(body) - allowed
     if unknown:
         field = sorted(unknown)[0]
         raise ApiError(f"{field} is not supported. Use temperature, top_k, top_p, min_p, and seed for sampling.", field)
+    for field in PENALTY_FIELDS:
+        if field in body:
+            penalty_off(body[field], field)
     from .stop_sequences import validate_stop
     stop = validate_stop(body.get("stop"))
     if body.get("model", model) != model:

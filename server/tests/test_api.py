@@ -1,6 +1,7 @@
 """Dependency-free API validation tests. The tokenizer has its own integration tests."""
+import dataclasses
 import unittest
-from server.api import validate_request, ApiError
+from server.api import validate_request, ApiError, Request
 
 class ApiTests(unittest.TestCase):
     def valid(self, **options):
@@ -59,9 +60,41 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(caught.exception.param, field)
 
     def test_unsupported_sampling_rejected(self):
-        for option in (dict(logit_bias={"1": 2}), dict(presence_penalty=1), dict(n=2)):
+        for option in (dict(logit_bias={"1": 2}), dict(repetition_penalty=1.1), dict(n=2)):
             with self.assertRaises(ApiError):
                 validate_request(self.valid(**option), "chat", "crucible")
+
+    def test_penalties_at_zero_or_null_are_the_same_request(self):
+        # SillyTavern and similar clients send both fields in every request. The engine has no penalty sampler, so
+        # 0 and null must give the same Request (and so the same engine job) as a body without them.
+        chat = self.valid(seed=7)
+        completion = dict(model="crucible", prompt="hello", max_tokens=8, temperature=0, seed=7)
+        for kind, body in (("chat", chat), ("completion", completion)):
+            expected = validate_request(body, kind, "crucible")
+            for field in ("presence_penalty", "frequency_penalty"):
+                for value in (0, 0.0, -0.0, None):
+                    with self.subTest(kind=kind, field=field, value=value):
+                        self.assertEqual(validate_request(body | {field: value}, kind, "crucible"), expected)
+            both = dict(presence_penalty=0, frequency_penalty=0.0)
+            self.assertEqual(validate_request(body | both, kind, "crucible"), expected)
+            self.assertEqual(validate_request(body | dict(presence_penalty=None, frequency_penalty=-0.0), kind,
+                                              "crucible"), expected)
+        names = {field.name for field in dataclasses.fields(Request)}
+        self.assertFalse(names & {"presence_penalty", "frequency_penalty"})
+
+    def test_penalties_other_than_zero_are_refused(self):
+        bad = (1, -1, 0.5, -0.1, 1e-9, 2.0, True, False, "0", "", [], [0], {}, {"a": 0}, float("nan"),
+               float("inf"), float("-inf"))
+        for kind in ("chat", "completion"):
+            body = self.valid() if kind == "chat" else dict(model="crucible", prompt="hello", max_tokens=8)
+            for field in ("presence_penalty", "frequency_penalty"):
+                for value in bad:
+                    with self.subTest(kind=kind, field=field, value=value):
+                        with self.assertRaises(ApiError) as caught:
+                            validate_request(body | {field: value}, kind, "crucible")
+                        self.assertEqual(caught.exception.param, field)
+                        self.assertEqual(caught.exception.status, 400)
+                        self.assertEqual(str(caught.exception), f"{field} must be 0. Crucible has no penalty sampler.")
 
     def test_bad_content(self):
         for messages in ([], [dict(role="tool", content="x")],
