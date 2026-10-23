@@ -6,7 +6,7 @@ from pathlib import Path
 import signal
 import sys
 from . import metrics
-from .api import MAX_MTP_WINDOW, MTP_WINDOW
+from .api import MAX_COUNT, MAX_MTP_WINDOW, MTP_WINDOW, MAX_ALL, ApiError, ServerDefaults
 from .backend import EngineBackend, LOOKUP_DEPTH, MAX_CONVERSATION_CACHE_MIB
 from .batch_scheduler import INTERLEAVE_MIN_ROWS
 from .hosts import ALLOWED_HOSTS_ENV, HostError, resolve_allowed_hosts
@@ -85,6 +85,18 @@ def main():
                              "browser can reach the server, for example --allowed-host 127.0.0.1,localhost,[::1].")
     parser.add_argument("--clamp-max-tokens", action="store_true",
                         help="Lower max_tokens to the context room instead of rejecting the request.")
+    parser.add_argument("--temperature", type=float, default=None, metavar="0..2",
+                        help="Server default temperature for requests that send none (default 0, greedy). A request "
+                             "field always wins.")
+    parser.add_argument("--top-k", type=int, default=None, metavar="N",
+                        help="Server default top_k for requests that send none (default 0, off).")
+    parser.add_argument("--top-p", type=float, default=None, metavar="0..1",
+                        help="Server default top_p for requests that send none (default 1, off).")
+    parser.add_argument("--min-p", type=float, default=None, metavar="0..1",
+                        help="Server default min_p for requests that send none (default 0, off).")
+    parser.add_argument("--default-max-tokens", default="128", metavar=f"1..{MAX_COUNT}|max",
+                        help="Output tokens for a request that sends no max_tokens or max_completion_tokens (default "
+                             "128). max gives it all the context room after its prompt. A request count is not changed.")
     parser.add_argument("--max-body-mib", type=int, default=None, metavar="N",
                         help="Largest request body: 1..64 MiB (default 1), or 1..1024 MiB with --vision (default 256). "
                              "A 256K-token conversation of code needs more than 1 MiB.")
@@ -163,6 +175,15 @@ def main():
     room = args.thinking_answer_room
     if room != "auto" and not (room.isdecimal() and int(room) <= 262144):
         parser.error("--thinking-answer-room must be auto or a token count in [0,262144]")
+    try:
+        sampling = {name: getattr(args, name) for name in ("temperature", "top_k", "top_p", "min_p")
+                    if getattr(args, name) is not None}
+        count = args.default_max_tokens
+        if count != MAX_ALL and not count.isdecimal():
+            parser.error(f"--default-max-tokens must be a count in [1,{MAX_COUNT}] or {MAX_ALL}")
+        defaults = ServerDefaults.checked(**sampling, max_tokens=count if count == MAX_ALL else int(count))
+    except ApiError as error:
+        parser.error(f"{error} (server default)")
     if not 0 <= args.mtp_window <= MAX_MTP_WINDOW:
         parser.error(f"--mtp-window must be in [0,{MAX_MTP_WINDOW}]")
     if args.draft_capture is not None and not args.draft_capture.is_absolute():
@@ -295,7 +316,8 @@ def main():
                     max_thinking_tokens=args.max_thinking_tokens,
                     stream_tool_calls=args.stream_tool_calls == "on",
                     max_requests_per_client=args.max_requests_per_client, vision=vision,
-                    default_mtp_prefix=args.mtp_window, capture=capture, allowed_hosts=allowed_hosts)))
+                    default_mtp_prefix=args.mtp_window, capture=capture, allowed_hosts=allowed_hosts,
+                    defaults=defaults)))
         server.daemon_threads = True
         # The switch changes prompt IDs, so the startup line records it with the address.
         print(f"Crucible is ready at http://127.0.0.1:{args.port}/v1 (content special tokens: "
@@ -305,6 +327,8 @@ def main():
                   file=sys.stderr, flush=True)
         else:
             print("Host check: off (any Host)", file=sys.stderr, flush=True)
+        if defaults.describe():
+            print("Request defaults: " + defaults.describe(), file=sys.stderr, flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass

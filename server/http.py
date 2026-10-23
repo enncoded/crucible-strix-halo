@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler
 from os.path import basename
 from traceback import extract_tb
 from . import anthropic, metrics
-from .api import LEGACY_MODEL, MTP_WINDOW, ApiError, validate_request
+from .api import DEFAULTS, LEGACY_MODEL, MTP_WINDOW, ApiError, validate_request
 from .hosts import REFUSED, host_allowed
 from .response import CompletionResponse
 from .think_budget import think_cap
@@ -79,7 +79,8 @@ class ReadDeadlines:
 class Service:
     def __init__(self, backend, tokenizer, model="crucible", clamp_max_tokens=False, default_thinking=False,
                  max_body_mib=1, thinking_answer_room=None, max_thinking_tokens=None, stream_tool_calls=True,
-                 max_requests_per_client=0, vision=None, default_mtp_prefix=MTP_WINDOW, capture=None, allowed_hosts=None):
+                 max_requests_per_client=0, vision=None, default_mtp_prefix=MTP_WINDOW, capture=None, allowed_hosts=None,
+                 defaults=DEFAULTS):
         self.backend, self.tokenizer, self.model = backend, tokenizer, model
         self.allowed_hosts = allowed_hosts  # hosts.parse_allowed_hosts(): None accepts any Host header
         self.capture = capture  # serve --draft-capture: None unless the operator turns it on
@@ -93,6 +94,7 @@ class Service:
         self.max_body_mib = max_body_mib
         self.clamp_max_tokens = clamp_max_tokens
         self.default_thinking = default_thinking
+        self.defaults = defaults  # serve sampling flags and --default-max-tokens (api.ServerDefaults)
 
     def capture_turn(self, request, prompt_ids, output_ids):
         """Give a finished turn to the draft capture, if any. Only the class and the IDs leave here."""
@@ -149,10 +151,14 @@ class Service:
         return "".join(restore.get(character, character) for character in text) if restore else text
 
     def fit(self, request, prompt_count):
-        """Opt-in: lower max_tokens to the room left in the context. A prompt that alone overflows still fails."""
-        if not self.clamp_max_tokens:
+        """--default-max-tokens max: a request with no count gets the room left in the context. Opt-in
+        --clamp-max-tokens: lower max_tokens to that room. A prompt that alone overflows still fails."""
+        if not (request.max_tokens_all or self.clamp_max_tokens):
             return request
         room = self.backend.context - prompt_count + 1
+        if request.max_tokens_all:
+            # Room below 1 means the prompt overflows: 1 token lets the backend refuse it with the usual message.
+            return replace(request, max_tokens=max(room, 1), max_tokens_all=False)
         return replace(request, max_tokens=room) if 1 <= room < request.max_tokens else request
 
     def think_cap(self, request):
@@ -577,7 +583,7 @@ def handler_for(service):
             """A chat request from a utility body, with the chat path's validation and server flags."""
             return validate_request(body, "chat", service.model, default_thinking=service.default_thinking,
                                     vision=service.vision, vocab=service.vocab,
-                                    default_mtp_prefix=service.default_mtp_prefix)
+                                    default_mtp_prefix=service.default_mtp_prefix, defaults=service.defaults)
 
         def tokenize(self):
             """OpenAI-compatible /tokenize: {"content": text or IDs} -> the completion prompt's IDs; {"messages": ...} (any
@@ -635,7 +641,8 @@ def handler_for(service):
                     raise ApiError("This endpoint is not supported.", status=404)
                 request = validate_request(self.read_body(), kinds[self.path], service.model,
                                            default_thinking=service.default_thinking, vision=service.vision,
-                                           vocab=service.vocab, default_mtp_prefix=service.default_mtp_prefix)
+                                           vocab=service.vocab, default_mtp_prefix=service.default_mtp_prefix,
+                                           defaults=service.defaults)
                 admitted = service.admit_client(address)
                 prompt_ids, offsets = service.prompt_ids(request)
                 request = service.fit(request, len(prompt_ids))

@@ -172,13 +172,15 @@ The server protects itself against a bad client:
 
 ## Supported request options
 
-- `temperature`: a finite number from `0` through `2`, default `0`.
-- `top_k`: an integer from `0` through `248320`; `0` disables this filter.
-- `top_p`: a finite number from `0` through `1`, default `1`.
-- `min_p`: a finite number from `0` through `1`, default `0`.
+- `temperature`: a finite number from `0` through `2`, default `0`. The server flag `--temperature` changes the default.
+- `top_k`: an integer from `0` through `248320`; `0` disables this filter. The flag `--top-k` changes the default.
+- `top_p`: a finite number from `0` through `1`, default `1`. The flag `--top-p` changes the default.
+- `min_p`: a finite number from `0` through `1`, default `0`. The flag `--min-p` changes the default.
+  A field in the request always wins over the server default. See [Server defaults](#server-defaults).
 - `seed`: an unsigned 64-bit integer. An omitted or null seed uses fresh system entropy.
   Every response and stream chunk reports the selected value as `seed`.
-- `max_tokens` or `max_completion_tokens`: a positive integer.
+- `max_tokens` or `max_completion_tokens`: a positive integer. The default is 128 when the request has neither field.
+  The flag `--default-max-tokens N|max` changes the default (see [Server defaults](#server-defaults)).
 - `stop`: one string or at most four strings, each with 1 to 4096 UTF-8 bytes.
   Null, an empty list, or an omitted field disables text stops.
 - `stream`: `true` or `false`.
@@ -304,6 +306,49 @@ This keeps the engine protocol synchronized.
 Without `--conversation-cache-mib`, each request resets the sequence state and the server keeps no conversation state.
 With it, the server keeps prompt snapshots in host memory, and session replay is on by default
 ([session replay](../docs/SESSION_REPLAY.md)). A restart clears the cache.
+
+### Server defaults
+
+Some clients cannot send sampling fields or `max_tokens`. Set the defaults on the server instead.
+A field in the request always wins over a server default.
+
+| Flag | Value | Default |
+| --- | --- | --- |
+| `--temperature` | a number from `0` through `2` | `0` (greedy) |
+| `--top-k` | an integer from `0` through `248320` | `0` (off) |
+| `--top-p` | a number from `0` through `1` | `1` (off) |
+| `--min-p` | a number from `0` through `1` | `0` (off) |
+| `--default-max-tokens` | an integer from `1` through `262144`, or `max` | `128` |
+
+- The server checks each value at start. A bad value stops the start with exit code 2, before the engine loads.
+- Without these flags, every request gives the same result as before.
+- `--default-max-tokens max` gives a request that has no `max_tokens` and no `max_completion_tokens` all the
+  context room after its prompt. The room is `context - prompt tokens + 1`, the same room that `--clamp-max-tokens`
+  uses. The rule applies to that request only.
+- A request that sends `max_tokens` keeps the old rules. The server rejects a count that does not fit the context,
+  or lowers it when `--clamp-max-tokens` is on.
+- With thinking on, the answer room and the think budget use the final count. For example, a context room of 30000
+  tokens gives an answer room of 4500 tokens.
+- A prompt that fills the context fails as before, with HTTP 400.
+- A response that uses the whole room ends with `finish_reason` `length`. The usage counts show the tokens that
+  the model made.
+- If `--top-k` is larger than the vocabulary of the model, the server uses the vocabulary size. This filters nothing.
+- The start line `Request defaults: ...` names each value that is not the built-in default.
+
+Qwen recommends sampling for thinking mode: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0.0`
+(model card of Qwen3.8-Flash-Next, section "Best Practices"). For non-thinking mode, Qwen recommends
+`temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0.0`.
+The card also warns of endless repetition and suggests `presence_penalty`, which this server does not support.
+Greedy decoding (the Crucible default) can repeat in long thinking, so sampling is the remedy.
+Example for thinking mode, with all the context room for the output:
+
+```bash
+python -m server "$CKPT" --engine build/engine/crucible --ctx 32768 \
+  --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0 --default-max-tokens max
+```
+
+Greedy output is the same for every run of a request. Sampled output changes with the `seed` field.
+A request that sends a `seed` still gives the same tokens each time.
 
 ## Image input
 

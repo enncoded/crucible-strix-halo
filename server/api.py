@@ -24,6 +24,44 @@ class ModelInfo:
 LEGACY_MODEL = ModelInfo(arch="qwen4_exp", vocab=248320, eos=248044, layers=48, hidden=2560)
 VOCAB = LEGACY_MODEL.vocab
 
+# serve --default-max-tokens max: a request without a count gets all the context room after its prompt (http.Service.fit).
+MAX_ALL = "max"
+MAX_COUNT = 262144
+
+
+@dataclass(frozen=True)
+class ServerDefaults:
+    """What a request that omits a field gets. The built-in values are the ones the server always used; the serve
+    flags --temperature, --top-k, --top-p, --min-p and --default-max-tokens replace them. A request field always wins."""
+    temperature: float = 0
+    top_k: int = 0
+    top_p: float = 1
+    min_p: float = 0
+    max_tokens: int | str = 128  # a count, or MAX_ALL
+
+    @classmethod
+    def checked(cls, **fields):
+        """The defaults with the request fields' ranges. It raises ApiError for a bad value, so serve can refuse it at start."""
+        values = dict(fields)
+        for name, high in (("temperature", 2), ("top_p", 1), ("min_p", 1)):
+            if name in values:
+                values[name] = number(values[name], name, 0, high)
+        if "top_k" in values:
+            values["top_k"] = integer(values["top_k"], "top_k", 0, VOCAB)
+        if "max_tokens" in values and values["max_tokens"] != MAX_ALL:
+            values["max_tokens"] = integer(values["max_tokens"], "max_tokens", 1, MAX_COUNT)
+        return cls(**values)
+
+    def describe(self):
+        """The values that differ from the built-in ones, for the start line (empty when none)."""
+        built_in = ServerDefaults()
+        return ", ".join(f"{name} {getattr(self, name)}" for name in ("temperature", "top_k", "top_p", "min_p", "max_tokens")
+                         if getattr(self, name) != getattr(built_in, name))
+
+
+DEFAULTS = ServerDefaults()
+
+
 class ApiError(ValueError):
     def __init__(self, message, param=None, status=400, code=None, counts=None):
         """code and counts are for the server log only (metrics.client_error_line); the client gets the message."""
@@ -64,6 +102,9 @@ class Request:
     preserve_thinking: bool | None = None
     thinking_budget: int | None = None
     images: tuple = ()
+    # True: the request sent no count and the server default is "max". max_tokens is then a placeholder until
+    # http.Service.fit sets the context room after the prompt.
+    max_tokens_all: bool = False
 
 def integer(value, field, low, high):
     if type(value) is not int or not low <= value <= high:
@@ -144,8 +185,9 @@ def chat_messages(value, vision=None, images=None):
     return normalize_messages(value, vision, images)
 
 def validate_request(body, kind, model, default_thinking=False, vision=None, vocab=VOCAB,
-                     default_mtp_prefix=MTP_WINDOW):
-    """vocab: the engine's vocabulary size (the backend's ModelInfo); the default suits engines before an earlier change."""
+                     default_mtp_prefix=MTP_WINDOW, defaults=DEFAULTS):
+    """vocab: the engine's vocabulary size (the backend's ModelInfo); the default suits engines before an earlier change.
+    defaults: the server's values for the fields that the request leaves out (ServerDefaults)."""
     if not isinstance(body, dict):
         raise ApiError("The request must be a JSON object.")
     allowed = {"model", "messages", "prompt", "max_tokens", "max_completion_tokens", "temperature", "n",
@@ -161,10 +203,11 @@ def validate_request(body, kind, model, default_thinking=False, vision=None, voc
     stop = validate_stop(body.get("stop"))
     if body.get("model", model) != model:
         raise ApiError(f"The loaded model is {model}.", "model", 404)
-    temperature = number(body.get("temperature", 0), "temperature", 0, 2)
-    top_k = integer(body.get("top_k", 0), "top_k", 0, vocab)
-    top_p = number(body.get("top_p", 1), "top_p", 0, 1)
-    min_p = number(body.get("min_p", 0), "min_p", 0, 1)
+    temperature = number(body.get("temperature", defaults.temperature), "temperature", 0, 2)
+    # A default above the vocabulary filters nothing, so it is capped instead of failing every request.
+    top_k = integer(body.get("top_k", min(defaults.top_k, vocab)), "top_k", 0, vocab)
+    top_p = number(body.get("top_p", defaults.top_p), "top_p", 0, 1)
+    min_p = number(body.get("min_p", defaults.min_p), "min_p", 0, 1)
     supplied_seed = body.get("seed")
     seed = secrets.randbits(64) if supplied_seed is None else integer(supplied_seed, "seed", 0, (1 << 64) - 1)
     metrics = boolean(body.get("crucible_metrics", False), "crucible_metrics")
@@ -175,7 +218,8 @@ def validate_request(body, kind, model, default_thinking=False, vision=None, voc
     if "max_tokens" in body and "max_completion_tokens" in body:
         raise ApiError("Use max_tokens or max_completion_tokens, not both.", "max_tokens")
     count_field = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
-    count = integer(body.get(count_field, 128), count_field, 1, 262144)
+    fill = count_field not in body and defaults.max_tokens == MAX_ALL
+    count = integer(MAX_COUNT if fill else body.get(count_field, defaults.max_tokens), count_field, 1, MAX_COUNT)
     spec = integer(body.get("spec", 7), "spec", 0, 7)
     draft_q = number(body.get("draft_q", 0.3), "draft_q", 0, 1)
     draft_head = body.get("draft_head", "64k")
@@ -217,4 +261,4 @@ def validate_request(body, kind, model, default_thinking=False, vision=None, voc
                    draft_q=draft_q, draft_head=draft_head, mtp_prefix=mtp_prefix, draft_adapt=draft_adapt,
                    tools=tools, tool_choice=choice, parallel_tool_calls=parallel, stop=stop,
                    crucible_metrics=metrics, preserve_thinking=preserve,
-                   thinking_budget=budget, images=tuple(images))
+                   thinking_budget=budget, images=tuple(images), max_tokens_all=fill)
