@@ -3,14 +3,16 @@ import json
 import unittest
 from dataclasses import replace
 
-from server.api import ServerDefaults
+from server.api import ApiError, ServerDefaults
 from server.tests.serve_fixtures import chunks, invoke
 from server.tests.test_server_defaults import parse
 from server.tests.test_think_budget import (ANSWER, IM_END, PROMPT, REASON, BudgetTokenizer, SequenceBackend,
                                             chat)
 from server.think_budget import skips_thinking
 
-ON, OFF = [1, 1], [1, 1, 1, 1, 1]  # the thinking-off render has a longer prompt, as the empty think block does
+# Fake renders with different lengths. A real thinking-off prompt is usually SHORTER (thinking on adds a reasoning-effort
+# system line at xhigh and low), and at effort medium it is longer. The fake off prompt is longer to test the second fit.
+ON, OFF = [1, 1], [1, 1, 1, 1, 1]
 
 
 class RenderTokenizer(BudgetTokenizer):
@@ -19,10 +21,23 @@ class RenderTokenizer(BudgetTokenizer):
     def encode(self, request):
         return PROMPT + (ON if request.enable_thinking else OFF)
 
+    def render_chat(self, request, add_generation_prompt=True):
+        return "thinking on" if request.enable_thinking else "thinking off"
+
 
 def run(backend, body, **service):
     response = invoke(backend, RenderTokenizer(), body, service_options=service or None)
     return response, (chunks(response) if body.get("stream") else json.loads(response.body))
+
+
+class RefusingBackend(SequenceBackend):
+    """The context check of backend.submit: a request that does not fit gets the usual HTTP 400."""
+
+    def submit(self, ids, request, **options):
+        if len(ids) + request.max_tokens - 1 > self.context:
+            raise ApiError(f"The prompt ({len(ids)} tokens) plus max_tokens ({request.max_tokens}) exceeds the context "
+                           f"window of {self.context} tokens.", "max_tokens")
+        return super().submit(ids, request, **options)
 
 
 def answer_backend():
@@ -139,7 +154,7 @@ class FinalCountTest(unittest.TestCase):
         ids, request, _ = backend.submissions[0]
         self.assertFalse(request.enable_thinking)
         self.assertEqual(ids, PROMPT + OFF)
-        self.assertEqual(request.max_tokens, 1100 - len(ids) + 1)  # fitted again: the off prompt is 3 tokens longer
+        self.assertEqual(request.max_tokens, 1100 - len(ids) + 1)  # fitted again: the fake off prompt is 3 tokens longer
         self.assertFalse(request.max_tokens_all)
 
     def test_max_with_a_large_room_keeps_thinking(self):
@@ -152,7 +167,7 @@ class FinalCountTest(unittest.TestCase):
                          (PROMPT + ON, 4000 - len(ids) + 1, 4000 - len(ids) + 1 - 1024))
 
     def test_max_at_the_edge_uses_the_thinking_on_room(self):
-        # The close limit is 256 when the room is 1280. The off prompt would give 3 fewer tokens, and that must not
+        # The close limit is 256 when the room is 1280. The fake off prompt would give 3 fewer tokens, and that must not
         # change a decision that was made on the thinking-on prompt.
         backend = SequenceBackend(([REASON] * 3, "length"))
         backend.context = 1280 + len(PROMPT + ON) - 1
@@ -166,6 +181,116 @@ class FinalCountTest(unittest.TestCase):
         ids, request, _ = backend.submissions[0]
         self.assertFalse(request.enable_thinking)
         self.assertEqual(request.max_tokens, 1100 - len(ids) + 1)
+
+
+class FitTest(unittest.TestCase):
+    """A skip needs both plans to fit the context. Otherwise the request keeps the thinking-on plan of v0.22.3."""
+
+    def plan(self, context, **fields):
+        backend = SequenceBackend(([ANSWER, IM_END], "stop"), ([ANSWER, IM_END], "stop"))
+        backend.context = context
+        run(backend, chat(max_tokens=256), min_thinking_tokens=256, **fields)
+        return backend.submissions[0]
+
+    def test_both_fit_skips(self):
+        ids, request, _ = self.plan(len(PROMPT + OFF) + 256 - 1)
+        self.assertFalse(request.enable_thinking)
+        self.assertEqual(ids, PROMPT + OFF)
+
+    def test_only_the_thinking_off_plan_overflows_keeps_thinking(self):
+        ids, request, options = self.plan(len(PROMPT + ON) + 256 - 1)  # on fits exactly; the longer off prompt does not
+        self.assertTrue(request.enable_thinking)
+        self.assertEqual((ids, request.max_tokens, options["think_cap"]), (PROMPT + ON, 256, 1))
+
+    def test_the_thinking_on_plan_overflows_keeps_the_old_refusal(self):
+        replies = []
+        for minimum in (256, 0):
+            backend = RefusingBackend(([ANSWER, IM_END], "stop"))
+            backend.context = len(PROMPT + ON) + 256 - 2  # the thinking-on request overflows by one token
+            response, _ = run(backend, chat(max_tokens=256), min_thinking_tokens=minimum)
+            replies.append((response.statuses, json.loads(response.body)))
+        self.assertEqual(replies[0], replies[1])  # the same HTTP 400 and message as with the rule off
+        self.assertEqual(replies[0][0], [400])
+        self.assertIn("exceeds the context", replies[0][1]["error"]["message"])
+
+    def test_max_with_an_overflowing_prompt_keeps_max_tokens_1_and_thinking(self):
+        backend = answer_backend()
+        backend.context = 3  # room = 3 - 5 + 1 < 1, so fit gives max_tokens 1
+        run(backend, chat(), defaults=ServerDefaults(max_tokens="max"), min_thinking_tokens=256)
+        ids, request, _ = backend.submissions[0]
+        self.assertEqual((ids, request.max_tokens, request.enable_thinking), (PROMPT + ON, 1, True))
+
+    def test_max_where_only_the_off_plan_overflows(self):
+        backend = answer_backend()
+        backend.context = len(PROMPT + OFF) - 1  # on: room 4 fits. off: room 0 gives max_tokens 1 and 8 + 1 - 1 > 7
+        run(backend, chat(), defaults=ServerDefaults(max_tokens="max"), min_thinking_tokens=256)
+        ids, request, _ = backend.submissions[0]
+        self.assertTrue(request.enable_thinking)
+        self.assertEqual(ids, PROMPT + ON)
+
+
+class UtilityPathTest(unittest.TestCase):
+    """/tokenize and /apply-template return what chat prefills, the skip included. count_tokens keeps thinking on."""
+
+    def post(self, path, body, **service):
+        response = invoke(SequenceBackend(), RenderTokenizer(), body, path=path, service_options=service or None)
+        return json.loads(response.body)
+
+    def test_tokenize_follows_the_plan(self):
+        body = dict(messages=[dict(role="user", content="Hi")], enable_thinking=True, max_tokens=256)
+        for path in ("/tokenize", "/v1/tokenize"):
+            self.assertEqual(self.post(path, body, min_thinking_tokens=256), dict(tokens=PROMPT + OFF))
+            self.assertEqual(self.post(path, body, min_thinking_tokens=0), dict(tokens=PROMPT + ON))
+            self.assertEqual(self.post(path, body | dict(max_tokens=4096), min_thinking_tokens=256),
+                             dict(tokens=PROMPT + ON))
+
+    def test_apply_template_follows_the_plan(self):
+        body = dict(messages=[dict(role="user", content="Hi")], enable_thinking=True, max_tokens=256)
+        self.assertEqual(self.post("/apply-template", body, min_thinking_tokens=256), dict(prompt="thinking off"))
+        self.assertEqual(self.post("/apply-template", body, min_thinking_tokens=0), dict(prompt="thinking on"))
+
+    def test_count_tokens_keeps_the_thinking_on_prompt(self):
+        body = dict(messages=[dict(role="user", content="Hi")], thinking=dict(type="enabled", budget_tokens=1024),
+                    max_tokens=256)
+        reply = self.post("/v1/messages/count_tokens", {key: value for key, value in body.items() if key != "max_tokens"},
+                          min_thinking_tokens=256)
+        self.assertEqual(reply, dict(input_tokens=len(PROMPT + ON)))
+
+
+class FixtureTemplateTest(unittest.TestCase):
+    """The real chat template: the skipped prompt is the enable_thinking: false render, and it is usually shorter."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from server.template import ChatTemplate
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        text = (Path(__file__).parent / "fixtures/qwen_chat_template.jinja").read_text()
+        (root / "tokenizer_config.json").write_text(json.dumps({"chat_template": text}))
+        self.template = ChatTemplate(root)
+
+    def tokenizer(self):
+        template = self.template
+
+        class Rendered(BudgetTokenizer):
+            def render_chat(self, request, add_generation_prompt=True):
+                return template.render(request.messages, request.enable_thinking, request.reasoning_effort)
+
+            def encode(self, request):
+                return list(self.render_chat(request).encode())
+
+        return Rendered()
+
+    def test_the_skipped_prompt_is_the_thinking_off_render(self):
+        messages = [dict(role="user", content="Hi")]
+        backend = answer_backend()
+        invoke(backend, self.tokenizer(), chat(max_tokens=256), service_options=dict(min_thinking_tokens=256))
+        ids, request, _ = backend.submissions[0]
+        self.assertEqual(bytes(ids).decode(), self.template.render(tuple(messages), enable_thinking=False))
+        on = self.template.render(tuple(messages), enable_thinking=True)
+        self.assertLess(len(ids), len(on.encode()))  # xhigh adds a reasoning-effort system line only when thinking is on
+        self.assertTrue(bytes(ids).decode().endswith("<think>\n\n</think>\n\n"))
 
 
 class FlagTest(unittest.TestCase):

@@ -104,6 +104,7 @@ export CRUCIBLE_ALLOWED_HOSTS='127.0.0.1,localhost,[::1],myserver'
 - An address that is not loopback prints one `WARNING` line at start.
   The server has no authentication, so every machine that can reach the address can use it.
 - Turn on strict Host mode (`--allowed-host`, above) and use a firewall that limits the port to the clients you trust.
+- `::` accepts IPv4 clients too: the server sets `IPV6_V6ONLY` to 0 on every host.
 - `--host` does not change the Host check rules.
 
 ### Tokenize and apply the template (`POST /tokenize`, `POST /v1/tokenize`, `POST /apply-template`)
@@ -117,9 +118,10 @@ slot, and no cache change. A success writes no log line; a refusal writes one `c
   and change nothing (the model has no BOS token). `with_pieces: true` gets HTTP 400, and so does a body with both
   `content` and `messages`.
 - `/tokenize` with `{"messages": [...]}` and any chat field (`tools`, `tool_choice`, thinking fields, `model`)
-  returns the IDs that `/v1/chat/completions` prefills for that request, with the server flags.
+  returns the IDs that `/v1/chat/completions` prefills for that request, with the server flags. This includes the
+  thinking skip (`--min-thinking-tokens`), which uses the request's `max_tokens`.
 - `/apply-template` with `{"messages": [...]}` and any chat field returns `{"prompt": "..."}`: the chat prompt text
-  that the template renders for that request. An image part shows as one placeholder; the prefill expands it.
+  that the template renders for that request, with the thinking skip as above. An image part shows as one placeholder; the prefill expands it.
 
 ### Token count (`POST /v1/messages/count_tokens`)
 
@@ -128,6 +130,7 @@ answers `200 {"input_tokens": N}`. N is the number of prompt IDs that `/v1/chat/
 conversation with the same server flags (template, tools, `--default-thinking`, `--vision`). The count calls the same
 prompt function as the chat path (`Service.prompt_ids` in `server/http.py`). It uses the CPU only: no engine command,
 no queue entry, no slot, and no cache change. A query string such as `?beta=true` is accepted.
+The count uses the thinking-on prompt. An Anthropic count body has no `max_tokens`, so the thinking skip (`--min-thinking-tokens`) does not apply.
 
 The request body is an Anthropic Messages body. `server/anthropic.py` maps it to a chat request:
 
@@ -195,6 +198,8 @@ The server protects itself against a bad client:
   no effect, because the engine has no penalty sampler. Any other value gets HTTP 400.
 - `max_tokens` or `max_completion_tokens`: a positive integer. The default is 128 when the request has neither field.
   The flag `--default-max-tokens N|max` changes the default (see [Server defaults](#server-defaults)).
+  A thinking request with a `max_tokens` below 1280 is served with thinking off. This includes a request with no count
+  under the default of 128. See `--min-thinking-tokens` below.
 - `stop`: one string or at most four strings, each with 1 to 4096 UTF-8 bytes.
   Null, an empty list, or an omitted field disables text stops.
 - `stream`: `true` or `false`.
@@ -266,7 +271,7 @@ The server keeps room for the answer, with Halogen's rule (Halogen 0.11 to 0.15)
 - The block closes after `max(1, max_tokens - room)` generated tokens, or after the budget if it is smaller.
   The server then writes Qwen's budget sentence, `</think>`, and two newlines. These tokens count against `max_tokens`.
 - With the default room and a `max_tokens` of 1025 or less, the block would close after 1 token, and the reasoning would be only Qwen's budget sentence.
-  This happens only with `--min-thinking-tokens 0`. See the next rule.
+  This happens only with `--min-thinking-tokens 0` or an explicit thinking budget. See the next rule.
 - `--min-thinking-tokens N` (default 256, range 0 to 262144) skips thinking when the room leaves too little.
   The rule applies to a chat request with thinking on and no explicit thinking budget (from the request or `--max-thinking-tokens`).
   It applies when `max_tokens - room` is below N. The server then serves the request with thinking off.
@@ -274,7 +279,11 @@ The server keeps room for the answer, with Halogen's rule (Halogen 0.11 to 0.15)
   An explicit thinking budget never skips. `--thinking-answer-room 0` never skips. `--min-thinking-tokens 0` turns the rule off.
   The limit of 256 is the point where the forced close sentence (about 25 tokens) is a large part of the thinking.
   Below it, real thinking has no room.
+- With the default room, a `max_tokens` below 1280 skips thinking. This includes a request with no `max_tokens`, which gets the default of 128.
+  To keep thinking, send a `max_tokens` of 1280 or more, or a thinking budget.
 - With `--default-max-tokens max` or `--clamp-max-tokens`, the rule uses the final `max_tokens`. A skip counts the prompt again with thinking off.
+- The server skips only when the request fits the context both with thinking on and with thinking off.
+  Otherwise the request keeps thinking, and a prompt that does not fit gets the same HTTP 400 as before.
 - A skipped request has `usage.completion_tokens_details.reasoning_skipped_by` set to `min_thinking_tokens`.
   It has no `reasoning_content`, as with thinking off.
 - When the whole close text fits, `usage.completion_tokens_details` has `reasoning_closed_at` (the token count) and

@@ -167,7 +167,7 @@ Bench-only kernel variants in `bench/kernels/`. Engine code never includes them.
 ### server (Python)
 
 The local HTTP API, the chat template, tokenization and the tool-call checks.
-The server binds only to `127.0.0.1`. It passes only the allowed switches to the engine
+The server binds to `127.0.0.1` by default (`--host` selects another address and prints a warning). It passes only the allowed switches to the engine
 (`ENGINE_KEEP_SWITCHES` in `server/backend.py`). See the [server guide](../server/README.md).
 
 ## Serving

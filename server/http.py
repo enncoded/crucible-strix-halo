@@ -168,17 +168,28 @@ class Service:
 
         The order matters. The decision needs the final max_tokens, and with --default-max-tokens max (or the clamp)
         Service.fit sets max_tokens from the context room after the prompt is counted. So the thinking-on prompt is
-        fitted first and the decision uses that count. The thinking-off prompt has more tokens (the empty think block),
-        so a skip renders and fits again on the off prompt, and the answer gets the room that is left.
+        fitted first and the decision uses that count. The thinking-off prompt has another length (usually fewer
+        tokens: the template adds a reasoning-effort system line only when thinking is on, but at effort medium the
+        empty think block makes it longer), so a skip renders and fits again on the off prompt.
         The off request has no cap, so the decision is made once.
+
+        A skip happens only when both plans fit the context. A prompt that the thinking-on plan refuses gets the same
+        refusal as before this rule, and one that only the off plan refuses stays on thinking.
         """
         ids, offsets = self.prompt_ids(request)
         fitted = self.fit(request, len(ids))
-        if self.skips_thinking(fitted):
+        if self.skips_thinking(fitted) and self.fits(ids, fitted):
             off = replace(request, enable_thinking=False, thinking_skipped_by=SKIPPED_BY)
-            ids, offsets = self.prompt_ids(off)
-            fitted = self.fit(off, len(ids))
+            off_ids, off_offsets = self.prompt_ids(off)
+            off_fitted = self.fit(off, len(off_ids))
+            if self.fits(off_ids, off_fitted):
+                return off_fitted, off_ids, off_offsets
         return fitted, ids, offsets
+
+    def fits(self, ids, request):
+        """The backend's own context check (backend.submit), so a plan never turns a served request into a refusal."""
+        context = getattr(self.backend, "context", None)
+        return context is None or (bool(ids) and len(ids) + request.max_tokens - 1 <= context)
 
     def skips_thinking(self, request):
         if request.kind != "chat" or not request.enable_thinking or not hasattr(self.tokenizer, "think_close_ids"):
@@ -626,7 +637,7 @@ def handler_for(service):
             if "messages" in body and "content" in body:
                 raise ApiError("Send content or messages, not both.", "content")
             if "messages" in body:
-                ids, _ = service.prompt_ids(self.chat_request(body))
+                _, ids, _ = service.plan(self.chat_request(body))  # the IDs that chat prefills, thinking skip included
             elif "content" in body and set(body) - {"content", "model"}:
                 field = sorted(set(body) - {"content", "model"})[0]
                 raise ApiError(f"{field} is not supported with content.", field)
@@ -648,7 +659,8 @@ def handler_for(service):
             body = self.read_body()
             if isinstance(body, dict) and "messages" not in body:
                 raise ApiError("messages must be a nonempty list.", "messages")
-            self.send_json(200, dict(prompt=service.prompt_text(self.chat_request(body))))
+            request, _, _ = service.plan(self.chat_request(body))  # the prompt that chat renders, skip included
+            self.send_json(200, dict(prompt=service.prompt_text(request)))
 
         def do_POST(self):
             self.jobs, self.output, self.body_read = [], None, False

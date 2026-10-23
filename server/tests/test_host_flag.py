@@ -95,6 +95,41 @@ class BindTest(unittest.TestCase):
         self.assertEqual(server.socket.family, socket.AF_INET)
         self.assertGreater(server.server_address[1], 0)
 
+    def test_the_bind_does_not_resolve_a_name(self):
+        # HTTPServer.server_bind calls socket.getfqdn, which asks the resolver. The server needs no name.
+        with patch("socket.getfqdn", side_effect=AssertionError("getfqdn called")):
+            server = self.serve("127.0.0.1")
+        self.assertEqual((server.server_name, server.server_port), ("127.0.0.1", server.server_address[1]))
+
+    @unittest.skipUnless(ipv6_available(), "this host has no IPv6 loopback (::1 does not bind)")
+    def test_ipv6_server_sets_v6only_to_0_before_it_binds(self):
+        # The kernel reports 1 for a socket bound to ::1 whatever we set, and only "::" depends on the option. A test
+        # must not bind "::" (every interface), so a spy records the option that server_bind sets.
+        calls = []
+
+        class Spy:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def setsockopt(self, *args):
+                calls.append(("setsockopt", args))
+                return self.inner.setsockopt(*args)
+
+            def bind(self, *args):
+                calls.append(("bind", args))
+                return self.inner.bind(*args)
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+        server = startup.Ipv6Server(("::1", 0), BaseHTTPRequestHandler, bind_and_activate=False)
+        self.addCleanup(server.server_close)
+        server.socket = Spy(server.socket)
+        server.server_bind()
+        names = [name for name, _ in calls]
+        self.assertEqual(calls[0], ("setsockopt", (socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)))
+        self.assertLess(names.index("setsockopt"), names.index("bind"))
+
     @unittest.skipUnless(ipv6_available(), "this host has no IPv6 loopback (::1 does not bind)")
     def test_binds_ipv6_loopback_on_port_0(self):
         server = self.serve("::1")

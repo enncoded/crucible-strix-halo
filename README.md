@@ -340,7 +340,8 @@ Keep every tokenizer file, weight shard, n-gram table, and MTP mixer patch.
 python -m server "$CKPT" --engine build/engine/crucible --ctx 32768
 ```
 
-The server binds to `127.0.0.1:8790`. It has no authentication. Do not expose it to a network.
+The server binds to `127.0.0.1:8790` by default. `--host ADDRESS` selects another address and prints a warning when it is
+not loopback. It has no authentication. Do not expose it to a network.
 Send a request from another terminal:
 
 ```sh

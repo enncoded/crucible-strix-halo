@@ -3,7 +3,8 @@ import argparse
 import ipaddress
 import os
 import socket
-from http.server import ThreadingHTTPServer
+import socketserver
+from http.server import ThreadingHTTPServer as StdlibServer
 from pathlib import Path
 import signal
 import sys
@@ -20,12 +21,26 @@ from .tokenization import ModelTokenizer
 DRAFT_BLOCKS_FILE_MAX = 64 * 1024
 
 
+class ThreadingHTTPServer(StdlibServer):
+    """The stdlib server without socket.getfqdn(): HTTPServer.server_bind asks the resolver for a name that nothing
+    here uses, and a slow or absent DNS would delay the bind. Tests patch this name, so main() keeps using it."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = str(self.server_address[0]), self.server_address[1]
+
+
 class Ipv6Server(ThreadingHTTPServer):
     address_family = socket.AF_INET6
 
+    def server_bind(self):
+        # Linux defaults to 0 but other hosts differ: set it, so "::" accepts IPv4 clients on every host.
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
 
 def listen_address(text):
-    """--host: an IPv4 or IPv6 literal. A host name is refused, so the bind never depends on a resolver."""
+    """--host: an IPv4 or IPv6 literal. A host name is refused, so the address never comes from a lookup."""
     try:
         if "%" in text:
             raise ValueError("scope id")

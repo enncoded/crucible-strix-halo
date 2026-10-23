@@ -1,5 +1,5 @@
-"""The Host header rule. The server binds 127.0.0.1 only, but a reverse proxy (llama-swap, nginx, LiteLLM) forwards the
-client's own Host header, so the default accepts any Host, as other local inference servers do. The strict list below is the
+"""The Host header rule. The server binds 127.0.0.1 by default (--host and its warning change that), but a reverse proxy
+(llama-swap, nginx, LiteLLM) forwards the client's own Host header, so the default accepts any Host, as other local inference servers do. The strict list below is the
 defence against DNS rebinding for a machine whose browser can reach the server."""
 ALLOWED_HOSTS_ENV = "CRUCIBLE_ALLOWED_HOSTS"
 MAX_PORT = 65535
