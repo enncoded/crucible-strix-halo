@@ -13,6 +13,7 @@ from os.path import basename
 from traceback import extract_tb
 from . import anthropic, metrics
 from .api import LEGACY_MODEL, MTP_WINDOW, ApiError, validate_request
+from .hosts import REFUSED, host_allowed
 from .response import CompletionResponse
 from .think_budget import think_cap
 
@@ -78,8 +79,9 @@ class ReadDeadlines:
 class Service:
     def __init__(self, backend, tokenizer, model="crucible", clamp_max_tokens=False, default_thinking=False,
                  max_body_mib=1, thinking_answer_room=None, max_thinking_tokens=None, stream_tool_calls=True,
-                 max_requests_per_client=0, vision=None, default_mtp_prefix=MTP_WINDOW, capture=None):
+                 max_requests_per_client=0, vision=None, default_mtp_prefix=MTP_WINDOW, capture=None, allowed_hosts=None):
         self.backend, self.tokenizer, self.model = backend, tokenizer, model
+        self.allowed_hosts = allowed_hosts  # hosts.parse_allowed_hosts(): None accepts any Host header
         self.capture = capture  # serve --draft-capture: None unless the operator turns it on
         self.default_mtp_prefix = default_mtp_prefix  # serve --mtp-window
         # RA-10: open completion requests per client address (0: no limit). Loopback clients share one address.
@@ -335,9 +337,8 @@ def handler_for(service):
                 self.output, self.jobs = None, []
 
         def local_host(self):
-            port = self.server.server_address[1]
-            if self.headers.get("Host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
-                raise ApiError("Use the local loopback address for this server.", status=403)
+            if not host_allowed(self.headers.get("Host"), service.allowed_hosts):
+                raise ApiError(REFUSED, status=403)
 
         def send_json(self, status, body):
             encoded = json.dumps(body, ensure_ascii=True, allow_nan=False).encode("utf-8")

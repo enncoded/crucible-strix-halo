@@ -180,7 +180,11 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(backend.jobs, [])
 
     def test_host_guard(self):
+        # Any Host is accepted by default (a reverse proxy keeps its own); a strict list refuses the others.
         status, _, raw, backend = self.handle(self.chat(), host="malicious.example:8790")
+        self.assertEqual(status, 200)
+        status, _, raw, backend = self.handle(self.chat(), host="malicious.example:8790",
+                                              allowed_hosts=(("127.0.0.1", None), ("localhost", None)))
         self.assertEqual(status, 403)
         self.assertEqual(backend.jobs, [])
 

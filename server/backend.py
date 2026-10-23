@@ -10,6 +10,7 @@ import time
 from . import metrics
 from .engine_messages import ENGINE_REJECTED, ProtocolError
 from .api import LEGACY_MODEL, ApiError, ModelInfo, STOP_IDS
+from .hosts import ALLOWED_HOSTS_ENV
 from .pixel_files import PixelStore
 
 @dataclass
@@ -67,7 +68,9 @@ ENGINE_KEEP_SWITCHES = frozenset({
 def engine_environment(environ):
     """The engine's environment with only the allowed CRUCIBLE_* switches (RA-15), and the removed names."""
     removed = sorted(name for name in environ if name.startswith("CRUCIBLE_") and name not in ENGINE_KEEP_SWITCHES)
-    return {name: value for name, value in environ.items() if name not in removed}, removed
+    # A server setting, not an engine switch: the engine never sees it, and the startup line does not report it.
+    removed_here = [name for name in removed if name != ALLOWED_HOSTS_ENV]
+    return {name: value for name, value in environ.items() if name not in removed}, removed_here
 
 
 class EngineBackend:

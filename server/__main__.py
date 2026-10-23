@@ -1,5 +1,6 @@
 """Run a temporary loopback server. The caller must hold the shared GPU lock."""
 import argparse
+import os
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 import signal
@@ -8,6 +9,7 @@ from . import metrics
 from .api import MAX_MTP_WINDOW, MTP_WINDOW
 from .backend import EngineBackend, LOOKUP_DEPTH, MAX_CONVERSATION_CACHE_MIB
 from .batch_scheduler import INTERLEAVE_MIN_ROWS
+from .hosts import ALLOWED_HOSTS_ENV, HostError, resolve_allowed_hosts
 from .http import Service, handler_for
 from .tokenization import ModelTokenizer
 
@@ -75,6 +77,12 @@ def main():
     parser.add_argument("--state-disk-write-gib-per-day", type=int, default=None, metavar="0..65536",
                         help="SSD wear guard: GiB that --state-dir may write in one local day, across restarts "
                              "(default 300). Above it, spills and stop flushes are refused; 0 only reads.")
+    parser.add_argument("--allowed-host", action="append", default=[], metavar="HOST[:PORT]",
+                        help=f"Strict mode: refuse (HTTP 403) every request whose Host header is not listed. Repeat the "
+                             f"flag or use commas; HOST without a port matches any port; the match ignores case. It "
+                             f"replaces {ALLOWED_HOSTS_ENV} (same format). Default: any Host is accepted, which a "
+                             "reverse proxy needs; strict mode is the defence against DNS rebinding, so use it where a "
+                             "browser can reach the server, for example --allowed-host 127.0.0.1,localhost,[::1].")
     parser.add_argument("--clamp-max-tokens", action="store_true",
                         help="Lower max_tokens to the context room instead of rejecting the request.")
     parser.add_argument("--max-body-mib", type=int, default=None, metavar="N",
@@ -231,6 +239,10 @@ def main():
         engine_options += ("--host-reserve-mib", str(args.host_reserve_mib))
     if args.draft_blocks is not None:
         engine_options += ("--draft-blocks", str(args.draft_blocks))
+    try:
+        allowed_hosts = resolve_allowed_hosts(args.allowed_host, os.environ)
+    except HostError as error:
+        parser.error(f"--allowed-host: {error}" if args.allowed_host else str(error))
     if not 1024 <= args.port <= 65535:
         parser.error("--port must be in [1024,65535]")
     if not args.model_id or len(args.model_id) > 200:
@@ -283,11 +295,14 @@ def main():
                     max_thinking_tokens=args.max_thinking_tokens,
                     stream_tool_calls=args.stream_tool_calls == "on",
                     max_requests_per_client=args.max_requests_per_client, vision=vision,
-                    default_mtp_prefix=args.mtp_window, capture=capture)))
+                    default_mtp_prefix=args.mtp_window, capture=capture, allowed_hosts=allowed_hosts)))
         server.daemon_threads = True
         # The switch changes prompt IDs, so the startup line records it with the address.
         print(f"Crucible is ready at http://127.0.0.1:{args.port}/v1 (content special tokens: "
               f"{args.content_special_tokens})", file=sys.stderr, flush=True)
+        if allowed_hosts:
+            print("Host check: only " + ", ".join(host + (":" + port if port else "") for host, port in allowed_hosts),
+                  file=sys.stderr, flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
