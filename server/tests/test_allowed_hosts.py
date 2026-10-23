@@ -33,7 +33,7 @@ class DefaultOpenTest(unittest.TestCase):
     def test_proxy_host_is_accepted_by_default(self):
         # llama-swap keeps the client's Host header on the upstream request.
         for method in ("POST", "GET"):
-            for host in ("myserver:8080", "llama-swap.lan", "10.0.0.5:8080", "[fe80::1]:8080", "127.0.0.1:8790"):
+            for host in ("myserver:8080", "llama-swap.lan", "192.0.2.5:8080", "[fe80::1]:8080", "127.0.0.1:8790"):
                 with self.subTest(method=method, host=host):
                     self.assertEqual(status(post(host, method=method)), 200)
 
@@ -87,7 +87,7 @@ class StrictTest(unittest.TestCase):
 
     def test_look_alike_hosts_are_refused(self):
         for host in ("evil.com", "localhost.evil.com:8790", "127.0.0.1.evil.com", "xlocalhost", "[::2]:8790",
-                     "localhost@evil.com", "127.0.0.1:8790, evil.com", "", " "):
+                     "localhost@evil", "127.0.0.1:8790, evil.com", "", " "):
             with self.subTest(host=host):
                 self.assertEqual(status(post(host, self.strict)), 403)
 
