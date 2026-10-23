@@ -337,6 +337,8 @@ def handler_for(service):
                 self.output, self.jobs = None, []
 
         def local_host(self):
+            if service.allowed_hosts is not None and len(self.headers.get_all("Host", [])) > 1:
+                raise ApiError("Send one Host header.", status=400)  # two headers could differ for proxy and server
             if not host_allowed(self.headers.get("Host"), service.allowed_hosts):
                 raise ApiError(REFUSED, status=403)
 
@@ -377,6 +379,12 @@ def handler_for(service):
                 path, _, query = self.path.partition("?")
                 if path == "/v1/crucible/trace":
                     self.send_json(200, dict(object="crucible.trace", data=service.backend.trace.since(trace_since(query))))
+                    return
+                if path == "/health":
+                    # The server binds only after the engine is ready, so an answer means ready. llama-swap polls this.
+                    if getattr(service.backend, "fatal", None):
+                        raise ApiError("The engine stopped.", status=503)
+                    self.send_json(200, dict(status="ok"))
                     return
                 if self.path != "/v1/models":
                     raise ApiError("This endpoint is not supported.", status=404)

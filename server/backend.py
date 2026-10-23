@@ -66,7 +66,11 @@ ENGINE_KEEP_SWITCHES = frozenset({
 })
 
 def engine_environment(environ):
-    """The engine's environment with only the allowed CRUCIBLE_* switches (RA-15), and the removed names."""
+    """The engine's environment with only the allowed CRUCIBLE_* switches (RA-15), and the removed names to report.
+
+    The environment always loses CRUCIBLE_ALLOWED_HOSTS, but the list does not name it: a server setting is not an
+    ignored engine switch. The caller must pass the environment to the engine even when the list is empty, because
+    the state-disk identity hashes every CRUCIBLE_* name the engine sees."""
     removed = sorted(name for name in environ if name.startswith("CRUCIBLE_") and name not in ENGINE_KEEP_SWITCHES)
     # A server setting, not an engine switch: the engine never sees it, and the startup line does not report it.
     removed_here = [name for name in removed if name != ALLOWED_HOSTS_ENV]
@@ -121,7 +125,7 @@ class EngineBackend:
         self.process = subprocess.Popen(arguments,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         text=True, encoding="utf-8", bufsize=1,
-                                        **({"env": environment} if removed else {}))
+                                        env=environment)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         try:

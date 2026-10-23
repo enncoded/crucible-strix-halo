@@ -28,11 +28,13 @@ def split_host(text):
         port = port if colon else None
         if ":" in (port or ""):
             raise HostError(f"{text!r} is not a host name")
+    if host.endswith(".") and not host.startswith("["):
+        host = host[:-1]  # one root dot names the same host: "localhost." is "localhost"
     if not host or any(character.isspace() or character in "/@,*\\?#" for character in host):
         raise HostError(f"{text!r} is not a host name")
     if port is not None and not (port.isascii() and port.isdecimal() and 0 < int(port) <= MAX_PORT):
         raise HostError(f"{text!r} has a port outside 1 to {MAX_PORT}")
-    return host, port
+    return host, None if port is None else str(int(port))  # "08790" is port 8790
 
 
 def parse_allowed_hosts(text):
@@ -44,9 +46,17 @@ def parse_allowed_hosts(text):
 
 
 def resolve_allowed_hosts(flags, environ):
-    """--allowed-host values (each may be a comma list) win over the environment variable. None: any Host."""
+    """--allowed-host values (each may be a comma list) win over the environment variable. None: any Host.
+
+    A flag that names no host (--allowed-host "") is an error: it must not drop the environment variable's list."""
     if flags:
-        return parse_allowed_hosts(",".join(flags))
+        try:
+            allowed = parse_allowed_hosts(",".join(flags))
+        except HostError as error:
+            raise HostError(f"--allowed-host: {error}") from None
+        if allowed is None:
+            raise HostError("--allowed-host names no host")
+        return allowed
     try:
         return parse_allowed_hosts(environ.get(ALLOWED_HOSTS_ENV))
     except HostError as error:

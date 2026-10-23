@@ -242,7 +242,7 @@ def main():
     try:
         allowed_hosts = resolve_allowed_hosts(args.allowed_host, os.environ)
     except HostError as error:
-        parser.error(f"--allowed-host: {error}" if args.allowed_host else str(error))
+        parser.error(str(error))
     if not 1024 <= args.port <= 65535:
         parser.error("--port must be in [1024,65535]")
     if not args.model_id or len(args.model_id) > 200:
@@ -303,6 +303,8 @@ def main():
         if allowed_hosts:
             print("Host check: only " + ", ".join(host + (":" + port if port else "") for host, port in allowed_hosts),
                   file=sys.stderr, flush=True)
+        else:
+            print("Host check: off (any Host)", file=sys.stderr, flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass

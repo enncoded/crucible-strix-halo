@@ -43,6 +43,7 @@ curl -sS -N http://127.0.0.1:8790/v1/chat/completions \
 
 Set `stream` to `false` for one JSON response.
 Use `GET /v1/models` to get the loaded model ID.
+Use `GET /health` for a readiness check: it answers `{"status":"ok"}` (HTTP 503 if the engine has stopped).
 Use `/v1/completions` with a `prompt` string for plain text.
 A completion prompt can also contain one list of token IDs.
 Batches are not supported.
@@ -53,28 +54,43 @@ The server accepts any `Host` header. A reverse proxy such as llama-swap, nginx 
 its own client, for example `myserver:8080`. The server answers it with no extra setting.
 The server still binds only `127.0.0.1`, so the proxy must run on the same machine.
 
-A llama-swap config:
+A llama-swap config (keys checked against llama-swap's `config-schema.json`):
 
 ```yaml
+healthCheckTimeout: 600   # seconds to wait for a model to load; the default is 120
 models:
   crucible:
     proxy: http://127.0.0.1:${PORT}
     cmd: >
-      python -m server /path/to/checkpoint --engine build/engine/crucible --port ${PORT}
-    checkTimeout: 600
+      /path/to/venv/bin/python -m server /path/to/checkpoint
+      --engine /path/to/build/engine/crucible --port ${PORT}
 ```
 
-Because the default accepts any `Host`, a web page can reach the server through DNS rebinding if your browser can
-open it. To prevent this, set the strict mode. Then the server refuses (HTTP 403) every other `Host`.
+- llama-swap polls `checkEndpoint` (default `/health`) for HTTP 200. `GET /health` answers `{"status":"ok"}` once the
+  engine is ready. The server binds its port only after that. `checkEndpoint: /v1/models` works too.
+- Use absolute paths in `cmd`, or start llama-swap in the folder that holds the repository: llama-swap runs `cmd` in
+  its own working directory.
+- The `Host` rule below applies to `/health` as it does to every other path.
+
+The default accepts any `Host`, so a web page can reach the server through DNS rebinding if your browser can open it.
+To prevent this, turn on strict mode. Then the server refuses (HTTP 403) every other `Host`.
 
 ```bash
 export CRUCIBLE_ALLOWED_HOSTS='127.0.0.1,localhost,[::1],myserver'
 # or: python -m server ... --allowed-host 127.0.0.1 --allowed-host localhost --allowed-host myserver
 ```
 
-- Each entry is `HOST` or `HOST:PORT`. A `HOST` with no port matches any port. The match ignores case.
+- Each entry is `HOST` or `HOST:PORT`. A `HOST` with no port matches any port. The match ignores case, leading zeros
+  in a port, and one trailing dot in the host.
 - `--allowed-host` (repeat it, or use commas) replaces `CRUCIBLE_ALLOWED_HOSTS` when you give both.
-- In strict mode, a request with no `Host` header is refused.
+  A flag that names no host (`--allowed-host ""`) stops the start.
+- In strict mode, a request with no `Host` header is refused (403), and a request with two `Host` headers is refused
+  (400).
+- Strict mode works through a proxy only if the proxy sends the client's `Host`. llama-swap does. nginx does not by
+  default: it sends `Host $proxy_host`, so the server sees only the proxy's own address. Then the proxy must do the
+  check, or you set `proxy_set_header Host $host;`.
+- `CRUCIBLE_ALLOWED_HOSTS=127.0.0.1:<port>,localhost:<port>` gives the behavior of the versions before this change.
+- The server prints `Host check: off (any Host)` or `Host check: only ...` at start.
 
 ### Tokenize and apply the template (`POST /tokenize`, `POST /v1/tokenize`, `POST /apply-template`)
 
