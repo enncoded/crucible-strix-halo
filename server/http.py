@@ -39,7 +39,7 @@ DRAIN_LIMIT_BYTES = 256 * 1024 * 1024
 LOGGED_METHODS = ("GET", "POST")
 LOGGED_VERSIONS = ("HTTP/1.0", "HTTP/1.1")
 LOGGED_PATHS = ("/v1/chat/completions", "/v1/completions", "/v1/models", "/v1/crucible/trace", COUNT_TOKENS_PATH,
-                "/tokenize", "/v1/tokenize", "/apply-template")
+                "/tokenize", "/v1/tokenize", "/apply-template", "/health")
 # Fixed client texts for the protocol errors that BaseHTTPRequestHandler raises before a method handler runs.
 PROTOCOL_ERRORS = {400: "The request line or headers are malformed.", 414: "The request line is too long.",
                    431: "The request headers are too large or too many.",

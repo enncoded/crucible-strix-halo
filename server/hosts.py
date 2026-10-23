@@ -32,7 +32,9 @@ def split_host(text):
         host = host[:-1]  # one root dot names the same host: "localhost." is "localhost"
     if not host or any(character.isspace() or character in "/@,*\\?#" for character in host):
         raise HostError(f"{text!r} is not a host name")
-    if port is not None and not (port.isascii() and port.isdecimal() and 0 < int(port) <= MAX_PORT):
+    # The length test comes first: int() refuses a digit string longer than 4300 characters with ValueError.
+    if port is not None and not (port.isascii() and port.isdecimal() and len(port.lstrip("0")) <= 5
+                                 and 0 < int(port) <= MAX_PORT):
         raise HostError(f"{text!r} has a port outside 1 to {MAX_PORT}")
     return host, None if port is None else str(int(port))  # "08790" is port 8790
 

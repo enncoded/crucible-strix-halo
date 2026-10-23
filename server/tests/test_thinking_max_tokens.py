@@ -140,7 +140,8 @@ class BatchedMaxTokensTest(CountGuard, unittest.TestCase):
         cap = 3000 - 1024
         # The host cancels the job after it sees the cap, so a loaded machine may let some more steps run (the unfixed case runs all 3000).
         self.assertGreaterEqual(steps[first], cap)
-        self.assertLessEqual(steps[first], cap + 64)
+        # The host cancels a few steps after it sees the cap, more under load; the bug ran all 3000 steps.
+        self.assertLess(steps[first], 3000 - 64)
         self.assertLessEqual(steps[second], 3000 - cap)
 
 

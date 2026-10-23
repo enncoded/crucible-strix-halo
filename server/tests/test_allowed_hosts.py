@@ -343,3 +343,11 @@ class StartLineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LongPortTest(unittest.TestCase):
+    def test_a_port_longer_than_the_int_limit_is_a_host_error(self):
+        from server.hosts import HostError, parse_allowed_hosts
+        with self.assertRaises(HostError):
+            parse_allowed_hosts("localhost:" + "9" * 5000)
+
