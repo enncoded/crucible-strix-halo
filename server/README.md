@@ -327,19 +327,23 @@ A field in the request always wins over a server default.
   uses. The rule applies to that request only.
 - A request that sends `max_tokens` keeps the old rules. The server rejects a count that does not fit the context,
   or lowers it when `--clamp-max-tokens` is on.
-- With thinking on, the answer room and the think budget use the final count. For example, a context room of 30000
+- With thinking on, the answer room and the think close position use the final count. For example, a context room of 30000
   tokens gives an answer room of 4500 tokens.
 - A prompt that fills the context fails as before, with HTTP 400.
 - A response that uses the whole room ends with `finish_reason` `length`. The usage counts show the tokens that
   the model made.
-- If `--top-k` is larger than the vocabulary of the model, the server uses the vocabulary size. This filters nothing.
+- `--top-k` accepts 0 to 248320. If the value is larger than the vocabulary of the loaded model, the server uses
+  the vocabulary size. This filters nothing.
+- With `--default-max-tokens max`, a request that sends `"max_tokens": null` gets HTTP 400. Leave the field out.
+- With `--short-streams`, a request that gets `max` needs a full-context slot, so it can wait longer. The output
+  does not change.
 - The start line `Request defaults: ...` names each value that is not the built-in default.
 
 Qwen recommends sampling for thinking mode: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0.0`
 (model card of Qwen3.8-Flash-Next, section "Best Practices"). For non-thinking mode, Qwen recommends
 `temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0.0`.
 The card also warns of endless repetition and suggests `presence_penalty`, which this server does not support.
-Greedy decoding (the Crucible default) can repeat in long thinking, so sampling is the remedy.
+Qwen recommends sampling, not greedy decoding (the Crucible default), for thinking mode.
 Example for thinking mode, with all the context room for the output:
 
 ```bash

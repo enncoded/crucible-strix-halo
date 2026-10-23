@@ -88,7 +88,7 @@ def main():
     parser.add_argument("--temperature", type=float, default=None, metavar="0..2",
                         help="Server default temperature for requests that send none (default 0, greedy). A request "
                              "field always wins.")
-    parser.add_argument("--top-k", type=int, default=None, metavar="N",
+    parser.add_argument("--top-k", type=int, default=None, metavar="0..248320",
                         help="Server default top_k for requests that send none (default 0, off).")
     parser.add_argument("--top-p", type=float, default=None, metavar="0..1",
                         help="Server default top_p for requests that send none (default 1, off).")
