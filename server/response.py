@@ -110,6 +110,8 @@ class CompletionResponse:
             if self.closed:
                 usage["completion_tokens_details"] |= dict(reasoning_closed_at=self.closed.tokens,
                                                            reasoning_closed_by=self.closed.by)
+        elif self.request.thinking_skipped_by:
+            usage["completion_tokens_details"] = dict(reasoning_skipped_by=self.request.thinking_skipped_by)
         if "cached_tokens" in event:
             cached = event["cached_tokens"]
             if type(cached) is not int or not 0 <= cached <= self.prompt_count:

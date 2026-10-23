@@ -253,6 +253,18 @@ The server keeps room for the answer, with Halogen's rule (Halogen 0.11 to 0.15)
   `--max-thinking-tokens N` sets a server default. The request value wins.
 - The block closes after `max(1, max_tokens - room)` generated tokens, or after the budget if it is smaller.
   The server then writes Qwen's budget sentence, `</think>`, and two newlines. These tokens count against `max_tokens`.
+- With the default room and a `max_tokens` of 1025 or less, the block would close after 1 token, and the reasoning would be only Qwen's budget sentence.
+  This happens only with `--min-thinking-tokens 0`. See the next rule.
+- `--min-thinking-tokens N` (default 256, range 0 to 262144) skips thinking when the room leaves too little.
+  The rule applies to a chat request with thinking on and no explicit thinking budget (from the request or `--max-thinking-tokens`).
+  It applies when `max_tokens - room` is below N. The server then serves the request with thinking off.
+  The prompt is the `enable_thinking: false` render, and the answer gets all of `max_tokens`.
+  An explicit thinking budget never skips. `--thinking-answer-room 0` never skips. `--min-thinking-tokens 0` turns the rule off.
+  The limit of 256 is the point where the forced close sentence (about 25 tokens) is a large part of the thinking.
+  Below it, real thinking has no room.
+- With `--default-max-tokens max` or `--clamp-max-tokens`, the rule uses the final `max_tokens`. A skip counts the prompt again with thinking off.
+- A skipped request has `usage.completion_tokens_details.reasoning_skipped_by` set to `min_thinking_tokens`.
+  It has no `reasoning_content`, as with thinking off.
 - When the whole close text fits, `usage.completion_tokens_details` has `reasoning_closed_at` (the token count) and
   `reasoning_closed_by` (`answer_room` or `max_thinking_tokens`).
 - The close position depends only on the request, so it lands on the same token with any decode mode, layout, or load.

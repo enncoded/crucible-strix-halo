@@ -105,6 +105,8 @@ class Request:
     # True: the request sent no count and the server default is "max". max_tokens is then a placeholder until
     # http.Service.fit sets the context room after the prompt.
     max_tokens_all: bool = False
+    # "min_thinking_tokens" when the server turned thinking off for this request (think_budget.skips_thinking).
+    thinking_skipped_by: str | None = None
 
 def integer(value, field, low, high):
     if type(value) is not int or not low <= value <= high:

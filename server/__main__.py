@@ -11,6 +11,7 @@ from .backend import EngineBackend, LOOKUP_DEPTH, MAX_CONVERSATION_CACHE_MIB
 from .batch_scheduler import INTERLEAVE_MIN_ROWS
 from .hosts import ALLOWED_HOSTS_ENV, HostError, resolve_allowed_hosts
 from .http import Service, handler_for
+from .think_budget import MIN_THINKING_DEFAULT
 from .tokenization import ModelTokenizer
 
 # serve --draft-blocks: the engine's file limit (draft_policy.h kDraftBlocksFileMax).
@@ -111,6 +112,11 @@ def main():
     parser.add_argument("--thinking-answer-room", default="auto", metavar="auto|N",
                         help="Tokens of max_tokens kept for the answer of a thinking request. auto is Halogen's "
                              "max(1024, 15%% of max_tokens); 0 lets thinking use all of max_tokens.")
+    parser.add_argument("--min-thinking-tokens", type=int, default=MIN_THINKING_DEFAULT, metavar="N",
+                        help="A thinking request with no explicit thinking budget is served with thinking off when "
+                             "the answer room leaves fewer than N tokens before the close (default "
+                             f"{MIN_THINKING_DEFAULT}; 0 = never). Below it the forced close sentence is a large part "
+                             "of the thinking.")
     parser.add_argument("--max-thinking-tokens", type=int, default=None, metavar="N",
                         help="Server default thinking budget. A request's own budget wins.")
     parser.add_argument("--stream-tool-calls", choices=("on", "off"), default="on",
@@ -201,6 +207,8 @@ def main():
         # The engine reads at most 64 KiB (kDraftBlocksFileMax); the full 1940-block selection is about 10 KB.
         if not 0 < args.draft_blocks.stat().st_size <= DRAFT_BLOCKS_FILE_MAX:
             parser.error(f"--draft-blocks must be a file of 1 to {DRAFT_BLOCKS_FILE_MAX} bytes")
+    if not 0 <= args.min_thinking_tokens <= 262144:
+        parser.error("--min-thinking-tokens must be in [0,262144]")
     if args.max_thinking_tokens is not None and not 1 <= args.max_thinking_tokens <= 262144:
         parser.error("--max-thinking-tokens must be in [1,262144]")
     if not 1 <= args.ctx <= 262144:
@@ -313,7 +321,7 @@ def main():
             Service(backend, tokenizer, args.model_id, clamp_max_tokens=args.clamp_max_tokens,
                     default_thinking=args.default_thinking == "on", max_body_mib=args.max_body_mib,
                     thinking_answer_room=None if room == "auto" else int(room),
-                    max_thinking_tokens=args.max_thinking_tokens,
+                    max_thinking_tokens=args.max_thinking_tokens, min_thinking_tokens=args.min_thinking_tokens,
                     stream_tool_calls=args.stream_tool_calls == "on",
                     max_requests_per_client=args.max_requests_per_client, vision=vision,
                     default_mtp_prefix=args.mtp_window, capture=capture, allowed_hosts=allowed_hosts,

@@ -15,7 +15,7 @@ from . import anthropic, metrics
 from .api import DEFAULTS, LEGACY_MODEL, MTP_WINDOW, ApiError, validate_request
 from .hosts import REFUSED, host_allowed
 from .response import CompletionResponse
-from .think_budget import think_cap
+from .think_budget import SKIPPED_BY, skips_thinking, think_cap
 
 # While no event comes, the handler polls the client this often, so a disconnect cancels the job between chunks.
 POLL_SECONDS = 0.25
@@ -80,7 +80,7 @@ class Service:
     def __init__(self, backend, tokenizer, model="crucible", clamp_max_tokens=False, default_thinking=False,
                  max_body_mib=1, thinking_answer_room=None, max_thinking_tokens=None, stream_tool_calls=True,
                  max_requests_per_client=0, vision=None, default_mtp_prefix=MTP_WINDOW, capture=None, allowed_hosts=None,
-                 defaults=DEFAULTS):
+                 defaults=DEFAULTS, min_thinking_tokens=0):
         self.backend, self.tokenizer, self.model = backend, tokenizer, model
         self.allowed_hosts = allowed_hosts  # hosts.parse_allowed_hosts(): None accepts any Host header
         self.capture = capture  # serve --draft-capture: None unless the operator turns it on
@@ -90,6 +90,7 @@ class Service:
         self.client_lock, self.client_requests = threading.Lock(), {}
         self.stream_tool_calls = stream_tool_calls
         self.thinking_answer_room, self.max_thinking_tokens = thinking_answer_room, max_thinking_tokens
+        self.min_thinking_tokens = min_thinking_tokens  # serve --min-thinking-tokens; 0 is the rule off
         self.vision = vision
         self.max_body_mib = max_body_mib
         self.clamp_max_tokens = clamp_max_tokens
@@ -160,6 +161,30 @@ class Service:
             # Room below 1 means the prompt overflows: 1 token lets the backend refuse it with the usual message.
             return replace(request, max_tokens=max(room, 1), max_tokens_all=False)
         return replace(request, max_tokens=room) if 1 <= room < request.max_tokens else request
+
+    def plan(self, request):
+        """(request, prompt IDs, image offsets) as the engine gets them: the prompt is counted, max_tokens is fitted,
+        and a thinking request whose answer-room close limit is below --min-thinking-tokens is served with thinking off.
+
+        The order matters. The decision needs the final max_tokens, and with --default-max-tokens max (or the clamp)
+        Service.fit sets max_tokens from the context room after the prompt is counted. So the thinking-on prompt is
+        fitted first and the decision uses that count. The thinking-off prompt has more tokens (the empty think block),
+        so a skip renders and fits again on the off prompt, and the answer gets the room that is left.
+        The off request has no cap, so the decision is made once.
+        """
+        ids, offsets = self.prompt_ids(request)
+        fitted = self.fit(request, len(ids))
+        if self.skips_thinking(fitted):
+            off = replace(request, enable_thinking=False, thinking_skipped_by=SKIPPED_BY)
+            ids, offsets = self.prompt_ids(off)
+            fitted = self.fit(off, len(ids))
+        return fitted, ids, offsets
+
+    def skips_thinking(self, request):
+        if request.kind != "chat" or not request.enable_thinking or not hasattr(self.tokenizer, "think_close_ids"):
+            return False
+        budget = request.thinking_budget or self.max_thinking_tokens
+        return skips_thinking(request.max_tokens, budget, self.thinking_answer_room, self.min_thinking_tokens)
 
     def think_cap(self, request):
         """Where the server closes the think block of this request (after the clamp), or None."""
@@ -644,8 +669,7 @@ def handler_for(service):
                                            vocab=service.vocab, default_mtp_prefix=service.default_mtp_prefix,
                                            defaults=service.defaults)
                 admitted = service.admit_client(address)
-                prompt_ids, offsets = service.prompt_ids(request)
-                request = service.fit(request, len(prompt_ids))
+                request, prompt_ids, offsets = service.plan(request)
                 options = {}
                 cap = service.think_cap(request)
                 if cap:
