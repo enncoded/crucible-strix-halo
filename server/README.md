@@ -61,15 +61,17 @@ healthCheckTimeout: 600   # seconds to wait for a model to load; the default is 
 models:
   crucible:
     proxy: http://127.0.0.1:${PORT}
+    env:
+      - PYTHONPATH=/path/to/crucible-strix-halo
     cmd: >
       /path/to/venv/bin/python -m server /path/to/checkpoint
-      --engine /path/to/build/engine/crucible --port ${PORT}
+      --engine /path/to/crucible-strix-halo/build/engine/crucible --port ${PORT}
 ```
 
 - llama-swap polls `checkEndpoint` (default `/health`) for HTTP 200. `GET /health` answers `{"status":"ok"}` once the
   engine is ready. The server binds its port only after that. `checkEndpoint: /v1/models` works too.
-- Use absolute paths in `cmd`, or start llama-swap in the folder that holds the repository: llama-swap runs `cmd` in
-  its own working directory.
+- llama-swap has no working-directory setting, so `python -m server` finds the `server` package through
+  `PYTHONPATH`. Use absolute paths in `cmd`.
 - The `Host` rule below applies to `/health` as it does to every other path.
 
 The default accepts any `Host`, so a web page can reach the server through DNS rebinding if your browser can open it.
