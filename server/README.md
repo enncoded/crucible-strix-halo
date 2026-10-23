@@ -2,7 +2,8 @@
 
 This server provides a small OpenAI-compatible API.
 It supports text chat and text completions with greedy or exact sampled decoding.
-It binds only to `127.0.0.1`, on port 8790 unless `--port` selects another port.
+It binds to `127.0.0.1` by default, on port 8790 unless `--port` selects another port.
+`--host ADDRESS` selects another bind address (see [Bind address](#bind-address)).
 It has no authentication and must remain local.
 It is not a persistent service.
 
@@ -52,7 +53,8 @@ Batches are not supported.
 
 The server accepts any `Host` header. A reverse proxy such as llama-swap, nginx or LiteLLM sends the `Host` header of
 its own client, for example `myserver:8080`. The server answers it with no extra setting.
-The server still binds only `127.0.0.1`, so the proxy must run on the same machine.
+The server binds `127.0.0.1` by default, so the proxy must run on the same machine.
+To reach it from another machine, use `--host` (see [Bind address](#bind-address)).
 
 A llama-swap config (keys checked against llama-swap's `config-schema.json`):
 
@@ -93,6 +95,16 @@ export CRUCIBLE_ALLOWED_HOSTS='127.0.0.1,localhost,[::1],myserver'
   check, or you set `proxy_set_header Host $host;`.
 - `CRUCIBLE_ALLOWED_HOSTS=127.0.0.1:<port>,localhost:<port>` gives the behavior of the versions before this change.
 - The server prints `Host check: off (any Host)` or `Host check: only ...` at start.
+
+### Bind address
+
+- `--host ADDRESS` sets the bind address. The default is `127.0.0.1`, so nothing changes without the flag.
+- `ADDRESS` is an IPv4 or IPv6 literal, for example `0.0.0.0`, `::`, or `::1`. A host name or a scope id (`%eth0`) stops the start (exit 2).
+- The start line `Crucible is ready at ...` shows the real address.
+- An address that is not loopback prints one `WARNING` line at start.
+  The server has no authentication, so every machine that can reach the address can use it.
+- Turn on strict Host mode (`--allowed-host`, above) and use a firewall that limits the port to the clients you trust.
+- `--host` does not change the Host check rules.
 
 ### Tokenize and apply the template (`POST /tokenize`, `POST /v1/tokenize`, `POST /apply-template`)
 
@@ -540,7 +552,7 @@ It records readiness, time to first token, and decode speed under `results/`.
   template, tokenization and tool-call checks. `EngineBackend` and
   `BatchedEngineBackend` talk to the engine's JSON-line protocol
   (`engine/serve/serve_protocol.h`, `engine/serve/batched_serve_protocol.h`).
-- **Invariants:** binds only to `127.0.0.1`. A request's output depends only
+- **Invariants:** binds to `127.0.0.1` unless `--host` says otherwise. A request's output depends only
   on the request. The serial backend is behind `--serial` in train 19 (rollback)
   and retires in train 20 with the serial engine serve.
 - **Allowed dependencies:** `requirements-cpu.txt` and the engine binary.

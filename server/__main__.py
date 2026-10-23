@@ -1,6 +1,8 @@
-"""Run a temporary loopback server. The caller must hold the shared GPU lock."""
+"""Run a temporary server (loopback by default). The caller must hold the shared GPU lock."""
 import argparse
+import ipaddress
 import os
+import socket
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 import signal
@@ -18,13 +20,44 @@ from .tokenization import ModelTokenizer
 DRAFT_BLOCKS_FILE_MAX = 64 * 1024
 
 
+class Ipv6Server(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
+def listen_address(text):
+    """--host: an IPv4 or IPv6 literal. A host name is refused, so the bind never depends on a resolver."""
+    try:
+        if "%" in text:
+            raise ValueError("scope id")
+        return ipaddress.ip_address(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not an IPv4 or IPv6 address literal (host names and scope ids are not accepted)") from None
+
+
+def bind_server(host, port, handler):
+    """The HTTP server bound to host:port. The IPv6 class sets address_family, which the IPv4 class does not."""
+    address = ipaddress.ip_address(host)
+    if address.version == 6:
+        return Ipv6Server((str(address), port), handler)
+    return ThreadingHTTPServer((str(address), port), handler)
+
+
+def listen_url(host, port):
+    return f"http://{f'[{host}]' if host.version == 6 else host}:{port}/v1"
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Temporary local Crucible server on 127.0.0.1:8790")
+    parser = argparse.ArgumentParser(description="Temporary local Crucible server (default 127.0.0.1:8790)")
     parser.add_argument("checkpoint", type=Path)
     parser.add_argument("--engine", type=Path, default=Path(__file__).resolve().parents[1] / "build/engine/crucible")
     parser.add_argument("--ctx", type=int, default=32768)
     parser.add_argument("--model-id", default="crucible")
-    parser.add_argument("--port", type=int, default=8790, help="Loopback port (default 8790).")
+    parser.add_argument("--host", type=listen_address, default="127.0.0.1", metavar="ADDRESS",
+                        help="Bind address: an IPv4 or IPv6 literal (default 127.0.0.1). The server has no "
+                             "authentication: an address that is not loopback (0.0.0.0, ::, a LAN address) lets every "
+                             "machine that can reach it use the server. Use --allowed-host and a firewall then.")
+    parser.add_argument("--port", type=int, default=8790, help="Port (default 8790).")
     parser.add_argument("--streams", type=int, choices=range(1, 9), default=None,
                         help="Batch slots (default 1). The batched stack serves every request, including speculation.")
     parser.add_argument("--serial", action="store_true",
@@ -317,7 +350,7 @@ def main():
                                            engine_options=engine_options,
                                            lookup=args.lookup, mtp_window=args.mtp_window)
             backend.draft_detail = args.draft_stats
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(
+        server = bind_server(args.host, args.port, handler_for(
             Service(backend, tokenizer, args.model_id, clamp_max_tokens=args.clamp_max_tokens,
                     default_thinking=args.default_thinking == "on", max_body_mib=args.max_body_mib,
                     thinking_answer_room=None if room == "auto" else int(room),
@@ -328,8 +361,12 @@ def main():
                     defaults=defaults)))
         server.daemon_threads = True
         # The switch changes prompt IDs, so the startup line records it with the address.
-        print(f"Crucible is ready at http://127.0.0.1:{args.port}/v1 (content special tokens: "
+        print(f"Crucible is ready at {listen_url(args.host, args.port)} (content special tokens: "
               f"{args.content_special_tokens})", file=sys.stderr, flush=True)
+        if not args.host.is_loopback:
+            print(f"WARNING: listening on {args.host}, which is not loopback. The server has no authentication: "
+                  "every machine that can reach this address can use it. Use --allowed-host (strict Host mode) "
+                  "and a firewall.", file=sys.stderr, flush=True)
         if allowed_hosts:
             print("Host check: only " + ", ".join(host + (":" + port if port else "") for host, port in allowed_hosts),
                   file=sys.stderr, flush=True)
